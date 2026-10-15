@@ -1,0 +1,52 @@
+# This is a system that samples the boiling event for superheated water.
+
+[runner]
+workers = 1
+files=["Orderp.py"]
+# One entry per worker; bench/bare_run.py --wmdrun rewrites this list.
+# The infentory original had 2 entries with overlapping pinning.
+wmdrun = ["gmx mdrun -ntomp 1 -ntmpi 1"]
+
+
+[simulation]
+interfaces = [-0.5500, -0.5493, -0.5484, -0.5473,
+              -0.5459, -0.5439, -0.5408, -0.5355,
+              -0.5278, -0.5171, -0.5095, -0.5045,
+              -0.5005, -0.4969, -0.4936, -0.4903,
+              -0.4869, -0.4830, -0.4783, -0.4710,
+              -0.4000,]
+steps = 1000000
+seed = 0
+load_dir = "load"
+shooting_moves = ['sh', 'sh', 'wf', 'wf',
+		  'wf', 'wf', 'wf', 'wf',
+		  'wf', 'wf', 'wf', 'wf',
+		  'wf', 'wf', 'wf', 'wf',
+		  'wf', 'wf', 'wf', 'wf',
+		  'wf']
+
+[simulation.tis_set]
+maxlength = 2000
+allowmaxlength = false
+zero_momentum = true # momentum true
+n_jumps = 4
+
+[engine]
+class = 'gromacs'
+engine = 'gmx'
+timestep = 0.002 # md timestep
+gmx_format = 'g96' # only g96 is supported for gromacs
+input_path = 'gromacs_input' # path to topolofy files
+gmx = 'gmx' # gromacs executable, may also be gmx_mpi, gmx_2023.3, etc.
+subcycles = 1000 # number of MD steps for each infretis step
+temperature = 573.15 # temperature of the simulation and velocity generations
+
+[orderparameter]
+class = 'H20Hole'
+module = 'Orderp.py'
+
+[output]
+data_dir = "./" # where to store infretis_data.txt
+screen = 1 # how often to print to sim.log
+pattern = 1 # how often we print info of which worker is in which ensemble at any time to pattern.txt
+delete_old = true # keep all old accepted trajectories (e.g. .trr or .xyz files) for analysis, beware of storage
