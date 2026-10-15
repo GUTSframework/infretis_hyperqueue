@@ -1,0 +1,32 @@
+ase==3.29.0
+click==8.5.0
+cloudpickle==3.1.2
+contourpy==1.3.3
+cycler==0.12.1
+fonttools==4.67.0
+hyperqueue==0.26.2
+infretis @ git+https://github.com/infretis/infretis@a42e039ba49eaf3c2b4021d6298c15e55f389735
+inftools @ git+https://github.com/infretis/inftools@ca33eae4258213f0cf526881918a643b8c5cc2ff
+iniconfig==2.3.1
+kiwisolver==1.5.1
+markdown-it-py==4.2.0
+matplotlib==3.11.2
+mdtraj==1.11.0
+mdurl==0.1.2
+numpy==1.26.4
+packaging==26.3
+pillow==12.3.0
+pluggy==1.7.0
+Pygments==2.21.0
+pyparsing==3.3.3
+pytest==9.1.1
+python-dateutil==2.9.0.post0
+rich==15.0.0
+scipy==1.17.1
+shellingham==1.5.4
+six==1.17.0
+tomli==2.5.0
+tomli_w==1.2.0
+tqdm==4.70.1
+typer==0.19.2
+typing_extensions==4.16.0

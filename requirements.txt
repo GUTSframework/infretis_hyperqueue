@@ -1,0 +1,8 @@
+# Pinned for all runs (ASSUMPTIONS.md). Install with scripts/setup-venv.sh.
+infretis @ git+https://github.com/infretis/infretis@a42e039ba49eaf3c2b4021d6298c15e55f389735
+inftools @ git+https://github.com/infretis/inftools@ca33eae4258213f0cf526881918a643b8c5cc2ff
+# Python client; must match the hq binary (flake.nix, scripts/get-hq.sh).
+hyperqueue==0.26.2
+# Order parameter of infentory water_boiling.
+mdtraj
+pytest
