@@ -44,11 +44,15 @@ requirements-lock.txt   exact versions, installed by setup-venv.sh
 scripts/get-hq.sh       pinned hq binary into ./bin, for clusters without Nix
 scripts/setup-venv.sh   .venv from the lock file
 ASSUMPTIONS.md          version pins and cluster assumptions
+bench/bare_run.py       run bare infretis on an example, record run.json
+bench/move_times.py     per-move time statistics from sim.log
+bench/cold_start.py     cold start of a fresh infretis worker process
+examples/               prepared infentory cases (examples/README.md)
 ```
 
 Planned (later steps): `src/gutsrun/` (generic: HQExecutor, backends, site
-files), `src/gutsrun_infretis/` (adapter + launcher), `sites/`, `tests/`,
-`examples/` (prepared infentory cases), `runs/` (outputs, not tracked).
+files), `src/gutsrun_infretis/` (adapter + launcher), `sites/`, `tests/`;
+`runs/` holds outputs and is not tracked.
 
 ## Getting started (laptop)
 
@@ -63,7 +67,7 @@ scripts/setup-venv.sh
 | Step | | State |
 |---|---|---|
 | 1 | Repo setup | done |
-| 2 | Bare infretis baseline + MD move times | next |
+| 2 | Bare infretis baseline + MD move times | done on the laptop (GROMACS at real size still open) |
 | 3 | `gutsrun` + test suite (gate C) | |
 | 4 | infretis adapter + launcher | |
 | 5 | HQ backend, local (gate A, D1) | |

@@ -7,8 +7,9 @@
 #     examples/puckering/prepare.sh [OUTDIR]     (default: runs/prepared/puckering)
 #
 # OUTDIR ends up with gromacs_input/ (solvated), eq/ (equilibration + MD),
-# and infinit/ whose load/ and final .toml are the initial paths for
-# bench/bare_run.py (see examples/README.md). Generated data is not tracked.
+# infinit/ (all infinit output) and ready/, the run-ready example for
+# bench/bare_run.py (assemble.py). Generated data is not tracked.
+# Took ~45 min on the laptop (4 cores), 2026-10-15.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -62,4 +63,7 @@ cfg["runner"]["wmdrun"] = ["gmx mdrun -ntomp 1 -ntmpi 1"] * workers
 open("infretis0.toml", "w").write(tomli_w.dumps(cfg))
 EOF
 "$inft" infinit -toml infretis0.toml
-echo "== done: $out/infinit"
+
+echo "== assemble"
+"$py" "$here/assemble.py" "$out"
+echo "== done: $out/ready"
