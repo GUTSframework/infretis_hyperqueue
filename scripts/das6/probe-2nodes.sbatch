@@ -3,10 +3,12 @@
 # repo root on fs0, after the venv exists:
 #
 #   sbatch scripts/das6/probe-2nodes.sbatch
+#   MODES=replace sbatch scripts/das6/probe-2nodes.sbatch    # one mode only
 #
 # bench/fs_latency.py plays ping-pong through a fresh directory on /home, one
 # rank per node: once polling with os.listdir (as the executor's watcher does),
-# once retrying open() on the known name. Each mode is capped at 4 min so that
+# once retrying open() on the known name, once rereading one file that is
+# replaced in place (like spool/CURRENT). Each mode is capped at 4 min so that
 # a slow NFS cache cannot run the job past its limit.
 # Results: runs/das6/probe-2nodes-<jobid>/ and the .out file next to it.
 #SBATCH --job-name=gutsrun-probe-2nodes
@@ -23,7 +25,7 @@ mkdir -p "$out"
 echo "nodes: $SLURM_JOB_NODELIST"; date -Is
 grep -E ' /home ' /proc/mounts
 
-for mode in listdir open; do
+for mode in ${MODES:-listdir open replace}; do
     echo "== $mode"
     timeout 240 srun --nodes=2 --ntasks=2 --ntasks-per-node=1 \
         "$repo/.venv/bin/python" "$repo/bench/fs_latency.py" "$out/$mode" \

@@ -9,6 +9,9 @@ name, then `os.replace`d into place.
 
 `--mode listdir` waits like the executor's watcher (`os.listdir` every
 `--poll` s); `--mode open` retries `open()` on the known name instead.
+`--mode replace` reuses one `ping` and one `pong` file, replaced each round,
+and rereads it until the content is that round's: this is how a task on
+another node sees `spool/CURRENT` change.
 
 Usage (one task per node, e.g. from an sbatch with --nodes=2):
 
@@ -34,16 +37,21 @@ def write(path: Path, text: str):
     os.replace(tmp, path)
 
 
-def wait_for(path: Path, mode: str, poll: float, timeout: float) -> str | None:
-    """Return the file's content once visible, or None after `timeout` s."""
+def wait_for(path: Path, mode: str, poll: float, timeout: float, want: str = "") -> str | None:
+    """Return the file's content once visible and starting with `want`, or None
+    after `timeout` s."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if mode == "listdir":
             if path.name in os.listdir(path.parent):
-                return path.read_text()
+                text = path.read_text()
+                if text.startswith(want):
+                    return text
         else:
             try:
-                return path.read_text()
+                text = path.read_text()
+                if text.startswith(want):
+                    return text
             except FileNotFoundError:
                 pass
         time.sleep(poll)
@@ -53,7 +61,7 @@ def wait_for(path: Path, mode: str, poll: float, timeout: float) -> str | None:
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("dir", type=Path, help="shared directory; created, must be fresh per run")
-    p.add_argument("--mode", choices=["listdir", "open"], default="listdir")
+    p.add_argument("--mode", choices=["listdir", "open", "replace"], default="listdir")
     p.add_argument("--rounds", type=int, default=30)
     p.add_argument("--poll", type=float, default=0.02, help="seconds between checks (executor default)")
     p.add_argument("--timeout", type=float, default=60.0, help="give up on one file after this many s")
@@ -76,22 +84,27 @@ def main():
         sys.exit(f"rank {args.rank}: no peer")
 
     rtts, bad = [], 0
+    # replace: one name per direction, content carries the round (read as "open").
+    names = (lambda i: ("ping", "pong")) if args.mode == "replace" else (lambda i: (f"ping.{i}", f"pong.{i}"))
+    how = "open" if args.mode == "replace" else args.mode
     for i in range(args.rounds):
         token = f"{i} {time.time_ns()}"
+        want = f"{i} " if args.mode == "replace" else ""
+        ping, pong = names(i)
         if args.rank == 0:
             start = time.perf_counter()
-            write(d / f"ping.{i}", token)
-            got = wait_for(d / f"pong.{i}", args.mode, args.poll, args.timeout)
+            write(d / ping, token)
+            got = wait_for(d / pong, how, args.poll, args.timeout, want)
             if got is None:
                 break
             rtts.append(time.perf_counter() - start)
             bad += not got.startswith(f"{i} ")
         else:
-            got = wait_for(d / f"ping.{i}", args.mode, args.poll, args.timeout)
+            got = wait_for(d / ping, how, args.poll, args.timeout, want)
             if got is None:
                 break
             bad += not got.startswith(f"{i} ")
-            write(d / f"pong.{i}", token)
+            write(d / pong, token)
 
     if args.rank == 0:
         q = statistics.quantiles(rtts, n=10) if len(rtts) >= 2 else [float("nan")] * 9
