@@ -36,9 +36,11 @@ Exact Python package versions: `requirements-lock.txt`.
 - Program execution must happen on compute nodes, never on the head node.
 - `/home` is shared between fs0 and the compute nodes (NFSv3, default
   attribute caching). Another node sees a renamed-in file in `os.listdir`
-  within one 20 ms poll; retrying `open()` on the known name can miss it
-  for over 20 s. Anything that waits for another node's file must list the
-  directory.
+  within one 20 ms poll, and a file replaced in place (like `spool/CURRENT`)
+  with its new content within one poll. But a node that looked a name up
+  before it existed keeps missing it: 30 s, once over 90 s. Anything that
+  waits for another node's file must list the directory, never retry
+  `open()`/`exists()` on the name.
 - `python3.12` is at `/usr/bin` on fs0 (3.12.11) and on the compute nodes
   (3.12.8); the default `python3` is 3.6.8. A venv built on fs0 runs on
   the nodes, also when unpacked to `/local`.

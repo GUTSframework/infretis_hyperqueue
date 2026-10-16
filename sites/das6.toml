@@ -32,8 +32,9 @@ local_disk = "/local"                 # NVMe, ~888 GB free on node009; TMPDIR=/t
 
 [fs]
 # /home is NFSv3 with default attribute caching. A file renamed into place on
-# one node shows up in os.listdir on another within one 20 ms poll; polling
-# open() on a known name missed it for over 20 s. Watch by listing.
+# one node shows up in os.listdir on another within one 20 ms poll, and so
+# does new content of a file replaced in place. Polling open() on a name that
+# did not exist yet missed it for 30 s (once over 90 s). Watch by listing.
 watch = "listdir"
 
 [engines]
