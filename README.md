@@ -50,6 +50,8 @@ bench/move_times.py     per-move time statistics from sim.log
 bench/cold_start.py     cold start of a fresh infretis worker process
 bench/hq_dispatch.py    HQ per-task round trip (program vs Python function task)
 bench/executor_roundtrip.py  round trip of a trivial call through gutsrun
+bench/step5.sh          each case through bare / gutsrun local / gutsrun HQ, back to back
+bench/timings_summary.py  per-phase medians from gutsrun-timings.jsonl
 examples/               prepared infentory cases (examples/README.md)
 src/gutsrun/            generic: TaskExecutor + backends (no MD imports)
 src/gutsrun_infretis/   infretis adapter + launcher (the only infretis-aware code)
@@ -109,9 +111,13 @@ swaps in `TaskExecutor` (infretis unforked) and fixes, for this run only:
 atomic `restart.toml` + backup at start, graceful SIGTERM/SIGINT (waits
 out `treat_output`), no busy spin in the parent (92 % → 2 % of a core),
 `wmdrun` pinning flags stripped under HQ, `-ntomp` checked against
-`--cores-per-task`. It asserts the infretis commit. Exit codes: 0 done,
-3 stopped by a signal, 4 infretis refused to start. Logs: `gutsrun.log`;
-moves log to `worker{pin}.log` as before.
+`--cores-per-task`. At start it checks the source of the four infretis
+functions it copies or relies on against the tested commit (`a42e039`);
+other infretis versions run if those are unchanged, otherwise it stops
+(`--allow-other-infretis` overrides). Exit codes: 0 done, 3 stopped by a
+signal, 4 infretis refused to start. Logs: `gutsrun.log`; moves log to
+`worker{pin}.log` as before; per-move timings go to
+`gutsrun-timings.jsonl` (`bench/timings_summary.py` summarises them).
 
 ## Tests
 
@@ -140,7 +146,7 @@ scripts/setup-venv.sh
 | 2 | Bare infretis baseline + MD move times | done on the laptop (GROMACS at real size still open) |
 | 3 | `gutsrun` + test suite (gate C) | done on the laptop; gate C passed (24/24) |
 | 4 | infretis adapter + launcher | done on the laptop; exact check passes (LAMMPS) |
-| 5 | HQ backend, local (gate A, D1) | |
+| 5 | HQ backend, local (gate A, D1) | done on the laptop; gate A passed; D1 numbers in the vault |
 | 6 | DAS-6 preflight | |
 | 7 | DAS-6, one node (gate B) | |
 | 8 | DAS-6, multi-node + drills | |
