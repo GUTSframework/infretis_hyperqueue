@@ -1,0 +1,31 @@
+# DAS-6, VU cluster (login node fs0). Site knobs for the all-in-one sbatch
+# (Fast Track step 7). Values marked "login probe" come from
+# runs/das6/probe-login.txt; "TBD" ones from the step-6 compute-node probes.
+
+[slurm]
+partition = "defq"          # 32 nodes; fatq (2 nodes, 96 CPUs) not used
+# Slurm sets no time limit; the 15 min is DAS-6 policy for 08:00-20:00.
+max_walltime_day = "00:15:00"
+max_nodes_day = 2           # our own rule for daytime jobs
+cpus_per_node = 48          # Slurm's count (login probe); physical cores TBD
+# Slurm reports 1 MB of memory per node (memory not configured): never pass --mem.
+exclusive = true
+needs_module = []           # sinfo/squeue worked without `module load prun` (login probe); sbatch TBD
+
+[python]
+interpreter = "/usr/bin/python3.12"   # 3.12.11 on fs0; TBD on compute nodes
+venv = "~/infretis_hyperqueue/.venv"  # on /home (NFS)
+# Node-local copy of the venv at job start: TBD (probe-node.sbatch decides).
+local_venv = "TBD"
+
+[paths]
+repo = "~/infretis_hyperqueue"
+runs = "~/infretis_hyperqueue/runs/das6"
+scratch = "/var/scratch/$USER"     # shared, 40 GB quota
+local_disk = "TBD"                    # fs0 has /local -> /local-ssd; compute nodes TBD
+
+[engines]
+# No GROMACS or LAMMPS modules on DAS-6 (login probe). Apptainer is at
+# /usr/bin/apptainer. How the engines get there is open (step 6).
+gromacs = "TBD"
+lammps = "TBD"

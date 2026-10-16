@@ -39,6 +39,13 @@ Exact Python package versions: `requirements-lock.txt`.
 - Python 3.12.11 exists on fs0 as `python3.12`; the default `python3` is
   3.6.8. Not yet checked on the compute nodes.
 - Compute nodes: 24-core EPYC, 128 GB, 100G Ethernet (VU cluster, 34 nodes).
+  Slurm counts 48 CPUs per `defq` node (probably SMT; `probe-node.sbatch`
+  checks) and reports no memory, so jobs must not pass `--mem`. Every `defq`
+  node has at least one GPU.
+- No GROMACS or LAMMPS modules (login probe). Apptainer is
+  installed (`/usr/bin/apptainer`). How the engines reach DAS-6 is open.
+- fs0 reaches PyPI and GitHub. `/home` quota: 4 GB soft, 5 GB hard, no file
+  limit; `/var/scratch/$USER`: 40 GB.
 - GPU nodes for chignolin: unknown.
 
 ## Snellius (first target)

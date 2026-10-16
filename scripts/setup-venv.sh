@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Create .venv with Python 3.12 and the exact versions in requirements-lock.txt.
-# On the laptop run it inside `nix develop`; on a cluster, load a Python 3.12
-# module first (DAS-6's default python3 is 3.6.8).
+# On the laptop run it inside `nix develop`. On a cluster, PYTHON must name a
+# Python 3.12 (DAS-6: /usr/bin/python3.12; the default python3 is 3.6.8), and
+# wheels only, without pip's cache in $HOME:
+#
+#   PIP_ONLY_BINARY=:all: PIP_NO_CACHE_DIR=1 bash scripts/setup-venv.sh
+#
+# (infretis and inftools still install from git; their build backends are wheels.)
 #
 # To change a pin: edit requirements.txt, run with REQS=requirements.txt, then
 # regenerate the lock with `.venv/bin/python -m pip freeze > requirements-lock.txt`.

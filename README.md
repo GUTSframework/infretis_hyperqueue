@@ -43,11 +43,15 @@ requirements.txt        direct pins (infretis, inftools, hyperqueue client)
 requirements-lock.txt   exact versions, installed by setup-venv.sh
 scripts/get-hq.sh       pinned hq binary into ./bin, for clusters without Nix
 scripts/setup-venv.sh   .venv from the lock file
+scripts/sync.sh         rsync the repo to a login node, pull runs/<site>/ back
+scripts/das6/           DAS-6 probes: login node (read-only), one-node and two-node jobs
+sites/das6.toml         DAS-6 site knobs for the sbatch (TBD fields filled by step 6)
 ASSUMPTIONS.md          version pins and cluster assumptions
 PROVENANCE.md           where each file comes from, and under which terms
 bench/bare_run.py       run bare infretis on an example, record run.json
 bench/move_times.py     per-move time statistics from sim.log
-bench/cold_start.py     cold start of a fresh infretis worker process
+bench/cold_start.py     cold start of a fresh infretis worker process (N at once)
+bench/fs_latency.py     cross-node file visibility on a shared FS (ping-pong)
 bench/hq_dispatch.py    HQ per-task round trip (program vs Python function task)
 bench/executor_roundtrip.py  round trip of a trivial call through gutsrun
 bench/step5.sh          each case through bare / gutsrun local / gutsrun HQ, back to back
@@ -58,8 +62,7 @@ src/gutsrun_infretis/   infretis adapter + launcher (the only infretis-aware cod
 tests/                  pytest suite (gate C; adapter tests need infretis)
 ```
 
-Planned (later steps): `sites/<site>.toml`, `scripts/sync.sh`;
-`runs/<site>/<date>-<case>/` holds outputs and is not tracked.
+`runs/<site>/` holds outputs and is not tracked.
 
 ## gutsrun
 
