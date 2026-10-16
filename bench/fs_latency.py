@@ -11,14 +11,18 @@ name, then `os.replace`d into place.
 `--poll` s); `--mode open` retries `open()` on the known name instead.
 `--mode replace` reuses one `ping` and one `pong` file, replaced each round,
 and rereads it until the content is that round's: this is how a task on
-another node sees `spool/CURRENT` change.
+another node sees `spool/CURRENT` change. Both files exist, and each rank has
+read the other's once, before the first round, so only replacement is timed.
+
+Each rank prints one JSON line with its own waits (rank 0's waits are the
+round trips), so a stall shows which side did not see the other's file.
 
 Usage (one task per node, e.g. from an sbatch with --nodes=2):
 
     srun --nodes=2 --ntasks=2 --ntasks-per-node=1 \
         .venv/bin/python bench/fs_latency.py DIR --mode listdir --rounds 30
 
-Rank comes from SLURM_PROCID (or --rank). Rank 0 prints one JSON line.
+Rank comes from SLURM_PROCID (or --rank).
 """
 
 import argparse
@@ -73,6 +77,9 @@ def main():
     d = args.dir
     d.mkdir(parents=True, exist_ok=True)
     host = socket.gethostname()
+    ping, pong = d / "ping", d / "pong"
+    if args.mode == "replace":
+        write(ping if args.rank == 0 else pong, "-1 init")
     # Start-up handshake; generous timeout because srun may start ranks apart.
     if args.rank == 1:
         write(d / "ready", host)
@@ -82,42 +89,44 @@ def main():
         write(d / "go", host)
     if peer is None:
         sys.exit(f"rank {args.rank}: no peer")
+    if args.mode == "replace":  # look the other's file up once, so it is cached
+        theirs = pong if args.rank == 0 else ping
+        if wait_for(theirs, "listdir", args.poll, 300) is None:
+            sys.exit(f"rank {args.rank}: never saw {theirs.name}")
 
-    rtts, bad = [], 0
-    # replace: one name per direction, content carries the round (read as "open").
-    names = (lambda i: ("ping", "pong")) if args.mode == "replace" else (lambda i: (f"ping.{i}", f"pong.{i}"))
+    waits, bad, stalled = [], 0, None
     how = "open" if args.mode == "replace" else args.mode
     for i in range(args.rounds):
         token = f"{i} {time.time_ns()}"
         want = f"{i} " if args.mode == "replace" else ""
-        ping, pong = names(i)
+        if args.mode != "replace":
+            ping, pong = d / f"ping.{i}", d / f"pong.{i}"
+        mine, theirs = (ping, pong) if args.rank == 0 else (pong, ping)
         if args.rank == 0:
-            start = time.perf_counter()
-            write(d / ping, token)
-            got = wait_for(d / pong, how, args.poll, args.timeout, want)
-            if got is None:
-                break
-            rtts.append(time.perf_counter() - start)
-            bad += not got.startswith(f"{i} ")
-        else:
-            got = wait_for(d / ping, how, args.poll, args.timeout, want)
-            if got is None:
-                break
-            bad += not got.startswith(f"{i} ")
-            write(d / pong, token)
+            write(mine, token)
+        start = time.perf_counter()
+        got = wait_for(theirs, how, args.poll, args.timeout, want)
+        if got is None:
+            stalled = i
+            print(f"rank {args.rank} round {i}: not seen within {args.timeout} s", file=sys.stderr, flush=True)
+            break
+        waits.append(time.perf_counter() - start)
+        # progress, in case the job's time cap kills us before the summary
+        print(f"rank {args.rank} round {i}: {waits[-1]:.4f} s", file=sys.stderr, flush=True)
+        bad += not got.startswith(f"{i} ")
+        if args.rank == 1:
+            write(mine, token)
 
-    if args.rank == 0:
-        q = statistics.quantiles(rtts, n=10) if len(rtts) >= 2 else [float("nan")] * 9
-        print(json.dumps({
-            "mode": args.mode, "poll_s": args.poll, "dir": str(d),
-            "hosts": [host, peer], "rounds": args.rounds, "completed": len(rtts),
-            "bad_content": bad,
-            "rtt_median_s": round(statistics.median(rtts), 4) if rtts else None,
-            "rtt_p90_s": round(q[8], 4), "rtt_max_s": round(max(rtts), 4) if rtts else None,
-            "rtts_s": [round(r, 4) for r in rtts],
-        }))
-    elif bad:
-        print(f"rank 1: {bad} files with wrong content", file=sys.stderr)
+    q = statistics.quantiles(waits, n=10) if len(waits) >= 2 else [float("nan")] * 9
+    print(json.dumps({
+        "rank": args.rank, "mode": args.mode, "poll_s": args.poll, "timeout_s": args.timeout,
+        "dir": str(d), "hosts": [host, peer], "rounds": args.rounds, "completed": len(waits),
+        "stalled_in_round": stalled, "bad_content": bad,
+        # rank 0: round trips; rank 1: from its last write (or start) to the next ping
+        "wait_median_s": round(statistics.median(waits), 4) if waits else None,
+        "wait_p90_s": round(q[8], 4), "wait_max_s": round(max(waits), 4) if waits else None,
+        "waits_s": [round(w, 4) for w in waits],
+    }), flush=True)
 
 
 if __name__ == "__main__":

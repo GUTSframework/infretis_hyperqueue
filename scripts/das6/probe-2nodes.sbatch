@@ -3,7 +3,9 @@
 # repo root on fs0, after the venv exists:
 #
 #   sbatch scripts/das6/probe-2nodes.sbatch
-#   MODES=replace sbatch scripts/das6/probe-2nodes.sbatch    # one mode only
+#   MODES="open replace" ROUNDS=3 TIMEOUT=90 sbatch scripts/das6/probe-2nodes.sbatch
+#
+# (defaults: all three modes, ROUNDS=20, TIMEOUT=20 s per file)
 #
 # bench/fs_latency.py plays ping-pong through a fresh directory on /home, one
 # rank per node: once polling with os.listdir (as the executor's watcher does),
@@ -29,8 +31,8 @@ for mode in ${MODES:-listdir open replace}; do
     echo "== $mode"
     timeout 240 srun --nodes=2 --ntasks=2 --ntasks-per-node=1 \
         "$repo/.venv/bin/python" "$repo/bench/fs_latency.py" "$out/$mode" \
-        --mode "$mode" --rounds 20 --timeout 20 \
-        | tee "$out/$mode.json"
+        --mode "$mode" --rounds "${ROUNDS:-20}" --timeout "${TIMEOUT:-20}" \
+        | tee "$out/$mode.jsonl"
     echo "exit ${PIPESTATUS[0]}"
 done
 date -Is
