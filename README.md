@@ -47,12 +47,60 @@ ASSUMPTIONS.md          version pins and cluster assumptions
 bench/bare_run.py       run bare infretis on an example, record run.json
 bench/move_times.py     per-move time statistics from sim.log
 bench/cold_start.py     cold start of a fresh infretis worker process
+bench/hq_dispatch.py    HQ per-task round trip (program vs Python function task)
+bench/executor_roundtrip.py  round trip of a trivial call through gutsrun
 examples/               prepared infentory cases (examples/README.md)
+src/gutsrun/            generic: TaskExecutor + backends (no MD imports)
+tests/                  pytest suite for gutsrun (gate C)
 ```
 
-Planned (later steps): `src/gutsrun/` (generic: HQExecutor, backends, site
-files), `src/gutsrun_infretis/` (adapter + launcher), `sites/`, `tests/`;
-`runs/` holds outputs and is not tracked.
+Planned (later steps): `src/gutsrun_infretis/` (adapter + launcher),
+`sites/`; `runs/` holds outputs and is not tracked.
+
+## gutsrun
+
+`gutsrun.TaskExecutor` is a `concurrent.futures.Executor`: each `submit`
+runs as one backend task, a fresh `python -m gutsrun.task` process.
+
+```python
+from gutsrun import TaskExecutor
+from gutsrun.backends.hq import HQBackend        # or backends.local.LocalBackend
+
+ex = TaskExecutor(HQBackend(server_dir), "runs/x/spool",
+                  initializer=init, initargs=(cfg,),        # runs before every call
+                  resource_dict={"cores": 2})               # default per call
+fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})
+```
+
+- **Spool directory**, one subdirectory per executor instance (the
+  *epoch*): `in/` holds the pickled calls, `out/` the results
+  (`<tid>.<instance>.pkl`, temp + rename), `log/` stdout/stderr. `CURRENT`
+  names the live epoch. A new executor takes over the spool and deletes
+  older epochs. Tasks of an older epoch neither start nor publish.
+- **Completion** from result files (listed every 20 ms). Failures from the
+  backend every 2 s (HQ: one batched `get_failed_tasks` call). The first
+  result for a task wins; later ones are deleted. Files of finished
+  tasks are deleted; failed tasks keep their logs.
+- **HQ tasks are `program()` tasks**, not Python function tasks. They
+  carry only two paths (payload rule), and need no HQ Python environment.
+  HQ reruns a task after a worker crash (`crash_limit`, default 2). The
+  rerun gets a new instance number.
+- **Like `ProcessPoolExecutor` with spawn:** calls and results must pickle
+  by reference; the caller's `sys.path` is sent along. Exceptions arrive
+  with the remote traceback as `__cause__`. Unlike it, the initializer
+  runs before every call.
+- Both backends set `OMP_NUM_THREADS` to the task's cores (HQ does so for
+  every task).
+
+Tests:
+
+```bash
+.venv/bin/python -m pytest -m "not hq"         # local backend, anywhere
+nix develop --command .venv/bin/python -m pytest  # all, starts its own hq server + worker
+```
+
+The HQ tests start `hq server` and `hq worker` processes, which need TCP
+on localhost. They cannot run inside Claude Code's sandbox.
 
 ## Getting started (laptop)
 
@@ -68,7 +116,7 @@ scripts/setup-venv.sh
 |---|---|---|
 | 1 | Repo setup | done |
 | 2 | Bare infretis baseline + MD move times | done on the laptop (GROMACS at real size still open) |
-| 3 | `gutsrun` + test suite (gate C) | |
+| 3 | `gutsrun` + test suite (gate C) | done on the laptop (HQ tests need a run outside the sandbox) |
 | 4 | infretis adapter + launcher | |
 | 5 | HQ backend, local (gate A, D1) | |
 | 6 | DAS-6 preflight | |

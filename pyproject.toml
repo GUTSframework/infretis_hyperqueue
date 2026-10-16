@@ -1,0 +1,12 @@
+[project]
+name = "gutsrun"
+version = "0.0.1"
+description = "Run Python calls as cluster tasks behind a standard Executor (GUTS Fast Track)"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+testpaths = ["tests"]
+markers = [
+    "hq: needs the hq binary and the HyperQueue client (run inside `nix develop`)",
+]
