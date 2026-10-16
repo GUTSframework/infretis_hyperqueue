@@ -116,7 +116,7 @@ scripts/setup-venv.sh
 |---|---|---|
 | 1 | Repo setup | done |
 | 2 | Bare infretis baseline + MD move times | done on the laptop (GROMACS at real size still open) |
-| 3 | `gutsrun` + test suite (gate C) | done on the laptop (HQ tests need a run outside the sandbox) |
+| 3 | `gutsrun` + test suite (gate C) | done on the laptop; gate C passed (24/24) |
 | 4 | infretis adapter + launcher | |
 | 5 | HQ backend, local (gate A, D1) | |
 | 6 | DAS-6 preflight | |
