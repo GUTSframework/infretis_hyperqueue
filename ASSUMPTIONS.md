@@ -30,29 +30,27 @@ Exact Python package versions: `requirements-lock.txt`.
 
 ## DAS-6 (development)
 
-- We have an account. Slurm via `module load prun`; partition `defq`.
+What the code and job scripts rely on. Measured facts and numbers (nodes,
+storage, NFS timings, cold start): vault note
+`notes/2026-10-16-das-6-compute-nodes-and-home-nfs.md`.
+
+- We have an account. Partition `defq`; Slurm commands work without
+  `module load prun`. Never pass `--mem`: Slurm has no memory configured.
 - Jobs are limited to 15 min walltime 08:00–20:00; longer runs only at night
   or weekends, or with permission from das-sysadm@cs.vu.nl.
 - Program execution must happen on compute nodes, never on the head node.
-- `/home` is shared between fs0 and the compute nodes (NFSv3, default
-  attribute caching). Another node sees a renamed-in file in `os.listdir`
-  within one 20 ms poll, and a file replaced in place (like `spool/CURRENT`)
-  with its new content within one poll. But a node that looked a name up
-  before it existed keeps missing it: 30 s, once over 90 s. Anything that
-  waits for another node's file must list the directory, never retry
-  `open()`/`exists()` on the name.
-- `python3.12` is at `/usr/bin` on fs0 (3.12.11) and on the compute nodes
-  (3.12.8); the default `python3` is 3.6.8. A venv built on fs0 runs on
-  the nodes, also when unpacked to `/local`.
-- Compute nodes: AMD EPYC 7402P, 24 cores x 2 SMT (Slurm counts 48 CPUs),
-  one NUMA node, 125 GB, 100G Ethernet (VU cluster, 34 nodes). Slurm reports
-  no memory, so jobs must not pass `--mem`. Node-local NVMe at `/local`
-  (~0.9 TB free). Soft limit of 1024 open files.
-- Every `defq` node has at least one GPU in Slurm's view.
-- No GROMACS or LAMMPS modules (login probe). Apptainer is
-  installed (`/usr/bin/apptainer`). How the engines reach DAS-6 is open.
-- fs0 reaches PyPI and GitHub. `/home` quota: 4 GB soft, 5 GB hard, no file
-  limit; `/var/scratch/$USER`: 40 GB.
+- `/home` (NFS) is shared between fs0 and the compute nodes. Anything that
+  waits for another node's file lists the directory, never retries
+  `open()`/`exists()` on the name: a node that looked a name up before it
+  existed can keep missing it for 30 s or more. A file replaced in place is
+  seen at once; `spool/CURRENT` relies on that.
+- `/usr/bin/python3.12` exists on fs0 and the compute nodes (patch levels
+  differ); the default `python3` is 3.6.8. The venv is built on fs0.
+- Workers run a node-local copy of the venv, unpacked to `/local` at job
+  start (plan decision 15), so everything is called as `python -m`:
+  entry-point scripts keep the `/home` venv in their shebang.
+- No GROMACS or LAMMPS from the site. Engines come the way researchers get
+  theirs; which way is open.
 - GPU nodes for chignolin: unknown.
 
 ## Snellius (first target)
