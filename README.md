@@ -51,11 +51,12 @@ bench/hq_dispatch.py    HQ per-task round trip (program vs Python function task)
 bench/executor_roundtrip.py  round trip of a trivial call through gutsrun
 examples/               prepared infentory cases (examples/README.md)
 src/gutsrun/            generic: TaskExecutor + backends (no MD imports)
-tests/                  pytest suite for gutsrun (gate C)
+src/gutsrun_infretis/   infretis adapter + launcher (the only infretis-aware code)
+tests/                  pytest suite (gate C; adapter tests need infretis)
 ```
 
-Planned (later steps): `src/gutsrun_infretis/` (adapter + launcher),
-`sites/`; `runs/` holds outputs and is not tracked.
+Planned (later steps): `sites/<site>.toml`, `scripts/sync.sh`;
+`runs/<site>/<date>-<case>/` holds outputs and is not tracked.
 
 ## gutsrun
 
@@ -92,11 +93,31 @@ fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})
 - Both backends set `OMP_NUM_THREADS` to the task's cores (HQ does so for
   every task).
 
-Tests:
+## Running infretis through gutsrun
+
+In an infretis run directory, instead of `infretisrun -i infretis.toml`:
 
 ```bash
-.venv/bin/python -m pytest -m "not hq"         # local backend, anywhere
-nix develop --command .venv/bin/python -m pytest  # all, starts its own hq server + worker
+PYTHONPATH=<repo>/src python -m gutsrun_infretis.launcher -i infretis.toml --backend local
+HQ_SERVER_DIR=... PYTHONPATH=<repo>/src python -m gutsrun_infretis.launcher \
+    -i restart.toml --backend hq --cores-per-task 2
+```
+
+or `bench/bare_run.py ... --runner gutsrun [--backend hq]`. The launcher
+swaps in `TaskExecutor` (infretis unforked) and fixes, for this run only:
+atomic `restart.toml` + backup at start, graceful SIGTERM/SIGINT (waits
+out `treat_output`), no busy spin in the parent (92 % → 2 % of a core),
+`wmdrun` pinning flags stripped under HQ, `-ntomp` checked against
+`--cores-per-task`. It asserts the infretis commit. Exit codes: 0 done,
+3 stopped by a signal, 4 infretis refused to start. Logs: `gutsrun.log`;
+moves log to `worker{pin}.log` as before.
+
+## Tests
+
+```bash
+nix develop --command .venv/bin/python -m pytest          # all but slow (~40 s)
+nix develop --command .venv/bin/python -m pytest -m slow  # LAMMPS exact check (~1 min)
+.venv/bin/python -m pytest -m "not hq"                    # without the dev shell: gutsrun only
 ```
 
 The HQ tests start `hq server` and `hq worker` processes, which need TCP
@@ -117,7 +138,7 @@ scripts/setup-venv.sh
 | 1 | Repo setup | done |
 | 2 | Bare infretis baseline + MD move times | done on the laptop (GROMACS at real size still open) |
 | 3 | `gutsrun` + test suite (gate C) | done on the laptop; gate C passed (24/24) |
-| 4 | infretis adapter + launcher | |
+| 4 | infretis adapter + launcher | done on the laptop; exact check passes (LAMMPS) |
 | 5 | HQ backend, local (gate A, D1) | |
 | 6 | DAS-6 preflight | |
 | 7 | DAS-6, one node (gate B) | |

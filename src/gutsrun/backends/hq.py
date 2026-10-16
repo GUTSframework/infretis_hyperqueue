@@ -11,8 +11,13 @@ One job per task, so a finished task can be forgotten on its own
   `hq` CLI.
 - HQ reruns a task whose worker crashed, up to `crash_limit` times; the
   rerun gets a new HQ_INSTANCE_ID and so a new result file name.
+- The client logs through module-level `logging.info`, which runs
+  `logging.basicConfig()` when the root logger has no handlers, and from
+  then on the caller's whole log goes to stderr. A NullHandler on the
+  root logger prevents that.
 """
 
+import logging
 import shutil
 import subprocess
 
@@ -27,6 +32,9 @@ class HQBackend:
                  gpu_resource: str = "gpus/nvidia", hq_bin: str | None = None):
         # server_dir must be a str: the FFI rejects pathlib.Path.
         self.server_dir = None if server_dir is None else str(server_dir)
+        root = logging.getLogger()
+        if not root.handlers:
+            root.addHandler(logging.NullHandler())
         self.client = Client(self.server_dir)
         self.crash_limit = crash_limit
         self.gpu_resource = gpu_resource

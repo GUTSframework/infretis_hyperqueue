@@ -7,6 +7,8 @@ requires-python = ">=3.12"
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]
 testpaths = ["tests"]
+addopts = "-m 'not slow'"
 markers = [
+    "slow: minutes-long real-MD checks; run with `pytest -m slow`",
     "hq: needs the hq binary and the HyperQueue client (run inside `nix develop`)",
 ]

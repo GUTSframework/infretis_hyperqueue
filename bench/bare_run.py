@@ -17,6 +17,10 @@ For GROMACS examples, `--wmdrun` is a template expanded once per worker with
 
 To restart a run in place (later chain links), pass `--restart`: it runs
 `infretisrun -i restart.toml` in the existing directory instead of copying.
+
+`--runner gutsrun` runs the same thing through the gutsrun launcher
+(`python -m gutsrun_infretis.launcher`) instead of `infretisrun`, with
+`--backend local|hq` and `--cores-per-task`.
 """
 
 import argparse
@@ -59,6 +63,9 @@ def parse_args():
     p.add_argument(
         "--restart", action="store_true", help="continue from restart.toml in RUNDIR"
     )
+    p.add_argument("--runner", choices=["bare", "gutsrun"], default="bare")
+    p.add_argument("--backend", choices=["local", "hq"], default="local")
+    p.add_argument("--cores-per-task", type=int, default=1)
     return p.parse_args()
 
 
@@ -122,10 +129,18 @@ def main():
     else:
         inp = prepare(args)
 
-    infretisrun = Path(sys.executable).with_name("infretisrun")
-    cmd = [str(infretisrun), "-i", inp]
+    env = None
+    if args.runner == "bare":
+        infretisrun = Path(sys.executable).with_name("infretisrun")
+        cmd = [str(infretisrun), "-i", inp]
+    else:
+        cmd = [sys.executable, "-m", "gutsrun_infretis.launcher", "-i", inp,
+               "--backend", args.backend, "--cores-per-task", str(args.cores_per_task)]
+        src = str(Path(__file__).resolve().parent.parent / "src")
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(
+            p for p in (src, os.environ.get("PYTHONPATH")) if p)}
     started = time.time()
-    proc = subprocess.Popen(cmd, cwd=args.rundir)
+    proc = subprocess.Popen(cmd, cwd=args.rundir, env=env)
     killed = False
     try:
         proc.wait(timeout=args.kill_after)
@@ -141,6 +156,8 @@ def main():
         "returncode": proc.returncode,
         "killed_after_s": args.kill_after if killed else None,
         "command": cmd,
+        "runner": args.runner,
+        "backend": args.backend if args.runner == "gutsrun" else None,
         "input": inp,
         "example": str(args.example),
         "host": platform.node(),
