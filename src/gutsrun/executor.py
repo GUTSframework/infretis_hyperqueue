@@ -169,8 +169,6 @@ class TaskExecutor(Executor):
             path = out / name
             with self._lock:
                 fut = self._pending.pop(tid, None)
-                if fut is not None:
-                    self.backend.release(tid)
             if fut is None:  # duplicate, late or unknown: the first result won
                 path.unlink(missing_ok=True)
                 continue
@@ -179,15 +177,19 @@ class TaskExecutor(Executor):
                     published = pickle.load(f)
                 result = published["result"]
             except Exception as e:
-                fut.set_exception(TaskFailed(f"task {tid}: unreadable result: {e!r}"))
-                continue
+                published, result = {}, ("err", TaskFailed(f"task {tid}: unreadable result: {e!r}"), "")
             self._record_timings(tid, published.get("t", {}))
             if result[0] == "ok":
                 fut.set_result(result[1])
             else:
                 exc = result[1]
-                exc.__cause__ = RemoteTraceback(f'\n"""\n{result[2]}"""')
+                if result[2]:
+                    exc.__cause__ = RemoteTraceback(f'\n"""\n{result[2]}"""')
                 fut.set_exception(exc)
+            # Free the backend slot only after delivering: the local backend
+            # waits here for the task process to exit (~0.1 s with infretis loaded).
+            with self._lock:
+                self.backend.release(tid)
             self._cleanup(tid, keep_logs=False)
 
     def _record_timings(self, tid, t):
