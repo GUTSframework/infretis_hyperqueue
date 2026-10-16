@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import json
 import os
 import pickle
 import time
@@ -70,10 +71,10 @@ def test_first_result_wins_duplicates_ignored(make_executor, tmp_path):
     tid = "00000000"
     wait_for(lambda: list(tmp_path.glob("started.*")), what="task started")
     # A competing result (as from an HQ rerun) arrives first.
-    spool.write_atomic(ex.dir / "out" / spool.result_name(tid, "9"), spool.dump(("ok", "first")))
+    spool.write_atomic(ex.dir / "out" / spool.result_name(tid, "9"), spool.dump({"result": ("ok", "first"), "t": {}}))
     assert fut.result(timeout=60) == "first"
     # So does a result for a task nobody submitted.
-    spool.write_atomic(ex.dir / "out" / spool.result_name("99999999", "0"), spool.dump(("ok", 1)))
+    spool.write_atomic(ex.dir / "out" / spool.result_name("99999999", "0"), spool.dump({"result": ("ok", 1), "t": {}}))
     # The real task finishes after ~1 s; its late result must be dropped too.
     time.sleep(2.5)
     assert os.listdir(ex.dir / "out") == []
@@ -125,4 +126,20 @@ def test_stale_epoch_task_does_nothing(tmp_path):
     assert task.main([str(old), "00000000"]) == 0
     assert marker.exists()
     (result,) = os.listdir(old / "out")
-    assert pickle.loads((old / "out" / result).read_bytes()) == ("ok", str(marker))
+    published = pickle.loads((old / "out" / result).read_bytes())
+    assert published["result"] == ("ok", str(marker))
+    assert published["t"]["start"] <= published["t"]["loaded"] <= published["t"]["done"]
+
+
+def test_timings_recorded(make_executor, tmp_path):
+    path = tmp_path / "timings.jsonl"
+    ex = make_executor(timings_path=path)
+    for f in [ex.submit(helpers.square, i) for i in range(3)]:
+        f.result(timeout=60)
+    ex.shutdown()
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert sorted(r["tid"] for r in rows) == ["00000000", "00000001", "00000002"]
+    for r in rows:
+        order = [r[k] for k in ("submitted", "start", "loaded", "inited", "done", "collected")]
+        assert order == sorted(order), r
+        assert r["host"] and r["instance"] == "0"

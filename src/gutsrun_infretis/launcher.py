@@ -17,7 +17,11 @@ Run it in the infretis run directory, like `infretisrun`. What it changes
 - Under HQ, `-pin`/`-pinoffset`/`-pinstride` are removed from `wmdrun`
   (HQ places tasks), and `-ntomp` must equal --cores-per-task (HQ sets
   OMP_NUM_THREADS to it; GROMACS aborts on a mismatch).
-- The infretis commit is asserted: the patches copy infretis code.
+- The infretis functions it copies or relies on are checked at start
+  against their source at the tested commit (`KNOWN_SOURCES`); a
+  mismatch stops the run unless --allow-other-infretis is given. Other
+  infretis commits with the same functions run fine.
+- `gutsrun-timings.jsonl`: per-move timings (see gutsrun.executor).
 
 Exit codes: 0 = all steps done, 3 = stopped by a signal (restart from
 restart.toml), 4 = infretis refused to start (see sim.log: nothing left
@@ -51,6 +55,8 @@ commit a42e039; see PROVENANCE.md), which carries this licence:
 
 import argparse
 import concurrent.futures
+import hashlib
+import inspect
 import json
 import logging
 import os
@@ -72,7 +78,18 @@ from infretis.classes.repex import REPEX_state
 from infretis.setup import setup_config
 from infretis.scheduler import scheduler
 
-INFRETIS_COMMIT = "a42e039ba49eaf3c2b4021d6298c15e55f389735"
+TESTED_COMMIT = "a42e039ba49eaf3c2b4021d6298c15e55f389735"
+# sha256 (first 16 hex) of inspect.getsource() at TESTED_COMMIT. The launcher
+# copies the first three and replaces the factory call in the fourth.
+KNOWN_SOURCES = {
+    "REPEX_state.write_toml": "a3dbdbcc527c9c9d",
+    "future_list.as_completed": "987641bc2f36a670",
+    "worker_initializer": "388c6696d0a234f3",
+    "aiorunner.__init__": "8f6009038fb50d42",
+}
+# Test hook: seconds to hold inside treat_output after touching
+# `treat_output.entered`, so a test can signal at exactly that point.
+HOLD_ENV = "GUTSRUN_INFRETIS_TEST_HOLD_TREAT"
 EXIT_DONE, EXIT_STOPPED, EXIT_REFUSED = 0, 3, 4
 
 log = logging.getLogger("gutsrun_infretis")
@@ -97,14 +114,14 @@ class InfretisExecutor(TaskExecutor):
 EXECUTORS: list[InfretisExecutor] = []
 
 
-def make_factory(make_backend, spool_dir, resource_dict):
+def make_factory(make_backend, spool_dir, resource_dict, timings_path=None):
     def factory(max_workers=None, initializer=None, initargs=(), mp_context=None):
         # infretis passes (worker_initializer, (counter, config)); keep the config.
         config = initargs[1]
         ex = InfretisExecutor(
             make_backend(max_workers), spool_dir, max_workers=max_workers,
             initializer=gutsrun_infretis.worker.init, initargs=(config,),
-            resource_dict=resource_dict)
+            resource_dict=resource_dict, timings_path=timings_path)
         EXECUTORS.append(ex)
         log.info("gutsrun executor: spool %s, epoch %s", ex.spool, ex.epoch)
         return ex
@@ -114,12 +131,39 @@ def make_factory(make_backend, spool_dir, resource_dict):
 # --- patches ----------------------------------------------------------------------
 
 
-def check_infretis_commit(allow_other: bool):
-    info = json.loads(distribution("infretis").read_text("direct_url.json") or "{}")
-    commit = info.get("vcs_info", {}).get("commit_id")
-    if commit != INFRETIS_COMMIT and not allow_other:
-        sys.exit(f"infretis is at {commit}, the launcher's patches are for "
-                 f"{INFRETIS_COMMIT}; check them, or pass --allow-other-infretis")
+def infretis_commit():
+    try:
+        info = json.loads(distribution("infretis").read_text("direct_url.json") or "{}")
+    except Exception:
+        return None
+    return info.get("vcs_info", {}).get("commit_id")
+
+
+def changed_sources() -> list[str]:
+    """Names in KNOWN_SOURCES whose infretis source differs from the tested one."""
+    from infretis.asyncrunner import aiorunner, worker_initializer
+
+    objects = {
+        "REPEX_state.write_toml": REPEX_state.write_toml,
+        "future_list.as_completed": future_list.as_completed,
+        "worker_initializer": worker_initializer,
+        "aiorunner.__init__": aiorunner.__init__,
+    }
+    return [name for name, obj in objects.items()
+            if hashlib.sha256(inspect.getsource(obj).encode()).hexdigest()[:16]
+            != KNOWN_SOURCES[name]]
+
+
+def check_infretis(allow_other: bool):
+    commit = infretis_commit()
+    changed = changed_sources()
+    log.info("infretis commit %s (tested: %s); changed functions: %s",
+             commit, TESTED_COMMIT, changed or "none")
+    if changed and not allow_other:
+        sys.exit(f"infretis {commit or '(unknown version)'} differs from the tested "
+                 f"{TESTED_COMMIT[:7]} in functions the launcher copies or relies on: "
+                 f"{', '.join(changed)}. Check src/gutsrun_infretis/launcher.py against "
+                 "them, or pass --allow-other-infretis to run anyway.")
 
 
 def write_toml_atomic(self):
@@ -163,8 +207,13 @@ class GracefulStop:
         original = REPEX_state.treat_output
         guard = self
 
+        hold = float(os.environ.get(HOLD_ENV, "0"))
+
         def treat_output(state, md_items):
             guard.in_treat = True
+            if hold:
+                Path("treat_output.entered").touch()
+                time.sleep(hold)
             try:
                 return original(state, md_items)
             finally:
@@ -237,7 +286,7 @@ def main(argv=None):
         logging.getLogger(name).addHandler(handler)
         logging.getLogger(name).setLevel(logging.INFO)
         logging.getLogger(name).propagate = False
-    check_infretis_commit(args.allow_other_infretis)
+    check_infretis(args.allow_other_infretis)
     check_restart_file(args.input)
 
     if args.backend == "local":
@@ -252,7 +301,8 @@ def main(argv=None):
             return HQBackend(args.hq_server_dir, crash_limit=args.crash_limit)
 
     resources = {"cores": args.cores_per_task, "cwd": os.getcwd()}
-    concurrent.futures.ProcessPoolExecutor = make_factory(make_backend, args.spool, resources)
+    concurrent.futures.ProcessPoolExecutor = make_factory(
+        make_backend, args.spool, resources, timings_path="gutsrun-timings.jsonl")
     REPEX_state.write_toml = write_toml_atomic
     future_list.as_completed = as_completed_sleeping
     stop = GracefulStop()

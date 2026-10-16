@@ -15,8 +15,14 @@ Completion: a watcher thread lists `out/` every `poll_interval` and asks
 the backend about failures every `failure_poll_interval`. The first
 result for a task wins; later ones (an HQ rerun, a duplicate) are deleted.
 Inputs, results and logs of finished tasks are deleted (inode budget).
+
+`timings_path`: if set, one JSON line per finished task with wall-clock
+times: submitted, start (runner process started), loaded (call unpickled,
+its modules imported), inited (initializer done), done (call done),
+collected (result read by the executor), plus instance and host.
 """
 
+import json
 import logging
 import os
 import pickle
@@ -50,7 +56,8 @@ class TaskExecutor(Executor):
     def __init__(self, backend: Backend, spool_dir, *, max_workers: int | None = None,
                  initializer=None, initargs=(), resource_dict: dict | None = None,
                  python: str = sys.executable, poll_interval: float = 0.02,
-                 failure_poll_interval: float = 2.0, keep_failed_logs: bool = True):
+                 failure_poll_interval: float = 2.0, keep_failed_logs: bool = True,
+                 timings_path=None):
         self.backend = backend
         self.max_workers = max_workers  # informational; the backend limits concurrency
         self.initializer, self.initargs = initializer, tuple(initargs)
@@ -59,6 +66,8 @@ class TaskExecutor(Executor):
         self.poll_interval = poll_interval
         self.failure_poll_interval = failure_poll_interval
         self.keep_failed_logs = keep_failed_logs
+        self._timings = open(timings_path, "a") if timings_path else None
+        self._submitted: dict[str, float] = {}
 
         self.spool = Path(spool_dir).resolve()
         self.epoch = spool.new_epoch()
@@ -91,6 +100,7 @@ class TaskExecutor(Executor):
             future = Future()
             future.set_running_or_notify_cancel()  # it runs as soon as the backend starts it
             self._pending[tid] = future
+            self._submitted[tid] = time.time()
             argv = [self.python, "-m", "gutsrun.task", str(self.dir), tid]
             log_base = str(self.dir / "log" / f"{tid}.{{instance}}")
             try:
@@ -121,6 +131,8 @@ class TaskExecutor(Executor):
             for tid, fut in self._pending.items():
                 fut.set_exception(TaskFailed("executor shut down"))
             self._pending.clear()
+            if self._timings:
+                self._timings.close()
 
     # --- internals ------------------------------------------------------------
 
@@ -164,10 +176,12 @@ class TaskExecutor(Executor):
                 continue
             try:
                 with open(path, "rb") as f:
-                    result = pickle.load(f)
+                    published = pickle.load(f)
+                result = published["result"]
             except Exception as e:
                 fut.set_exception(TaskFailed(f"task {tid}: unreadable result: {e!r}"))
                 continue
+            self._record_timings(tid, published.get("t", {}))
             if result[0] == "ok":
                 fut.set_result(result[1])
             else:
@@ -175,6 +189,14 @@ class TaskExecutor(Executor):
                 exc.__cause__ = RemoteTraceback(f'\n"""\n{result[2]}"""')
                 fut.set_exception(exc)
             self._cleanup(tid, keep_logs=False)
+
+    def _record_timings(self, tid, t):
+        submitted = self._submitted.pop(tid, None)
+        if self._timings is None:
+            return
+        row = {"tid": tid, "submitted": submitted, **t, "collected": time.time()}
+        self._timings.write(json.dumps(row) + "\n")
+        self._timings.flush()
 
     def _collect_failures(self):
         with self._lock:
@@ -189,6 +211,7 @@ class TaskExecutor(Executor):
                     self.backend.release(tid)
             if fut is None:
                 continue
+            self._submitted.pop(tid, None)
             msg = error or "exited without writing a result"
             fut.set_exception(TaskFailed(f"task {tid}: {msg}{self._stderr_tail(tid)}"))
             self._cleanup(tid, keep_logs=self.keep_failed_logs)

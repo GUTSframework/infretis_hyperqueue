@@ -7,9 +7,11 @@ libraries). The `slow` exact check runs LAMMPS (~3 min); run it with
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -17,8 +19,9 @@ import pytest
 pytest.importorskip("infretis.setup", exc_type=ImportError)
 
 from gutsrun.backends.local import LocalBackend  # noqa: E402
+from conftest import wait_for  # noqa: E402
 from gutsrun_infretis.launcher import (  # noqa: E402
-    EXIT_DONE, EXIT_STOPPED, InfretisExecutor, strip_pinning)
+    EXIT_DONE, EXIT_STOPPED, HOLD_ENV, InfretisExecutor, changed_sources, strip_pinning)
 
 ROOT = Path(__file__).resolve().parent.parent
 BARE_RUN = ROOT / "bench" / "bare_run.py"
@@ -33,6 +36,27 @@ def run(example, rundir, *args, check=True):
     return json.loads((rundir / "run.json").read_text())[-1]
 
 
+def prepare(example, rundir, workers, steps):
+    """Copy an example into a run dir, as bench/bare_run.py does."""
+    import tomli
+    import tomli_w
+
+    shutil.copytree(ROOT / "examples" / example, rundir)
+    (rundir / "load_copy").rename(rundir / "load")
+    cfg = tomli.loads((rundir / "infretis.toml").read_text())
+    cfg["runner"]["workers"] = workers
+    cfg["runner"]["wmdrun"] = [cfg["runner"]["wmdrun"][0]] * workers
+    cfg["simulation"]["steps"] = steps
+    (rundir / "infretis.toml").write_text(tomli_w.dumps(cfg))
+
+
+def launch(rundir, *args, env=None):
+    return subprocess.Popen(
+        [sys.executable, "-m", "gutsrun_infretis.launcher", *args], cwd=rundir,
+        env={**os.environ, "PYTHONPATH": str(ROOT / "src"), **(env or {})},
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+
 def path_numbers(rundir):
     rows = [line.split() for line in (rundir / "infretis_data.txt").read_text().splitlines()
             if line.strip() and not line.lstrip().startswith("#")]
@@ -44,6 +68,20 @@ def test_strip_pinning():
     assert strip_pinning(cmds, 2) == ["gmx mdrun -ntomp 2 -ntmpi 1", 1]
     with pytest.raises(SystemExit, match="-ntomp 2"):
         strip_pinning(cmds, 4)
+
+
+def test_known_infretis_sources():
+    """The installed infretis has the functions the launcher was written for."""
+    assert changed_sources() == []
+
+
+def test_changed_infretis_source_refused(monkeypatch):
+    from gutsrun_infretis import launcher
+
+    monkeypatch.setitem(launcher.KNOWN_SOURCES, "REPEX_state.write_toml", "0" * 16)
+    with pytest.raises(SystemExit, match="REPEX_state.write_toml"):
+        launcher.check_infretis(allow_other=False)
+    launcher.check_infretis(allow_other=True)  # warns in the log, runs
 
 
 def test_executor_takes_only_infretis_calls(tmp_path):
@@ -81,6 +119,43 @@ def test_sigterm_then_restart(tmp_path):
     assert list(rd.glob("restart.toml.bak.*")), "restart.toml was not backed up"
     nums = path_numbers(rd)
     assert len(nums) == len(set(nums)), "duplicate path numbers after restart"
+
+
+def test_sigterm_inside_treat_output(tmp_path):
+    """Deterministic version of the stop drill: the signal arrives while
+    treat_output runs (held there by a test hook). The launcher must finish
+    it, write restart.toml, and stop; a restart then completes cleanly."""
+    rd = tmp_path / "run"
+    prepare("2d_potential", rd, workers=2, steps=40)
+    proc = launch(rd, "-i", "infretis.toml", env={HOLD_ENV: "2"})
+    wait_for(lambda: (rd / "treat_output.entered").exists(), timeout=120, what="treat_output")
+    proc.send_signal(signal.SIGTERM)
+    out, _ = proc.communicate(timeout=120)
+    assert proc.returncode == EXIT_STOPPED, out
+    assert "stopping after treat_output" in (rd / "gutsrun.log").read_text()
+    import tomli
+    cstep = tomli.loads((rd / "restart.toml").read_text())["current"]["cstep"]
+    assert cstep >= 1
+
+    proc = launch(rd, "-i", "restart.toml")
+    out, _ = proc.communicate(timeout=600)
+    assert proc.returncode == EXIT_DONE, out
+    nums = path_numbers(rd)
+    assert len(nums) == len(set(nums)), "duplicate path numbers after restart"
+
+
+@pytest.mark.hq
+def test_launcher_through_hq(hq_cluster, tmp_path):
+    rd = tmp_path / "run"
+    prepare("2d_potential", rd, workers=2, steps=10)
+    proc = launch(rd, "-i", "infretis.toml", "--backend", "hq",
+                  "--hq-server-dir", str(hq_cluster.dir))
+    out, _ = proc.communicate(timeout=600)
+    assert proc.returncode == EXIT_DONE, out
+    rows = [json.loads(line) for line in (rd / "gutsrun-timings.jsonl").read_text().splitlines()]
+    assert len(rows) >= 10 and all(r["instance"] == "0" for r in rows)
+    nums = path_numbers(rd)
+    assert len(nums) == len(set(nums)) > 0
 
 
 @pytest.mark.slow
