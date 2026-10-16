@@ -44,6 +44,7 @@ requirements-lock.txt   exact versions, installed by setup-venv.sh
 scripts/get-hq.sh       pinned hq binary into ./bin, for clusters without Nix
 scripts/setup-venv.sh   .venv from the lock file
 ASSUMPTIONS.md          version pins and cluster assumptions
+PROVENANCE.md           where each file comes from, and under which terms
 bench/bare_run.py       run bare infretis on an example, record run.json
 bench/move_times.py     per-move time statistics from sim.log
 bench/cold_start.py     cold start of a fresh infretis worker process
