@@ -1,31 +1,43 @@
 # DAS-6, VU cluster (login node fs0). Site knobs for the all-in-one sbatch
-# (Fast Track step 7). Values marked "login probe" come from
-# runs/das6/probe-login.txt; "TBD" ones from the step-6 compute-node probes.
+# (Fast Track step 7). Facts come from the step-6 probes in runs/das6/:
+# probe-login.txt, probe-node-<jobid>.out, probe-2nodes-<jobid>.out.
 
 [slurm]
 partition = "defq"          # 32 nodes; fatq (2 nodes, 96 CPUs) not used
 # Slurm sets no time limit; the 15 min is DAS-6 policy for 08:00-20:00.
 max_walltime_day = "00:15:00"
 max_nodes_day = 2           # our own rule for daytime jobs
-cpus_per_node = 48          # Slurm's count (login probe); physical cores TBD
+cpus_per_node = 48          # Slurm's count: 24 cores x 2 SMT (EPYC 7402P, 1 socket, 1 NUMA node)
+cores_per_node = 24
+# 125 GB RAM per node.
 # Slurm reports 1 MB of memory per node (memory not configured): never pass --mem.
 exclusive = true
-needs_module = []           # sinfo/squeue worked without `module load prun` (login probe); sbatch TBD
+needs_module = []           # sinfo, squeue, sbatch and srun work without `module load prun`
 
 [python]
-interpreter = "/usr/bin/python3.12"   # 3.12.11 on fs0; TBD on compute nodes
+# 3.12.11 on fs0, 3.12.8 on the compute nodes, same path. The venv is built
+# on fs0 and runs on the nodes (same ABI within 3.12).
+interpreter = "/usr/bin/python3.12"
 venv = "~/infretis_hyperqueue/.venv"  # on /home (NFS)
-# Node-local copy of the venv at job start: TBD (probe-node.sbatch decides).
-local_venv = "TBD"
+# Unpack bin/venv.tar to local_disk at job start (2.2 s per node) and run
+# that copy: worker cold start 0.94 s vs 1.08 s from /home (one at a time),
+# 2.06 s vs 2.31 s with 48 at once.
+local_venv = true
 
 [paths]
 repo = "~/infretis_hyperqueue"
 runs = "~/infretis_hyperqueue/runs/das6"
 scratch = "/var/scratch/$USER"     # shared, 40 GB quota
-local_disk = "TBD"                    # fs0 has /local -> /local-ssd; compute nodes TBD
+local_disk = "/local"                 # NVMe, ~888 GB free on node009; TMPDIR=/tmp (158 GB)
+
+[fs]
+# /home is NFSv3 with default attribute caching. A file renamed into place on
+# one node shows up in os.listdir on another within one 20 ms poll; polling
+# open() on a known name missed it for over 20 s. Watch by listing.
+watch = "listdir"
 
 [engines]
-# No GROMACS or LAMMPS modules on DAS-6 (login probe). Apptainer is at
-# /usr/bin/apptainer. How the engines get there is open (step 6).
+# No GROMACS or LAMMPS modules on DAS-6. Apptainer 1.4.0 at /usr/bin/apptainer.
+# Engines come the way researchers get theirs; which way is still open.
 gromacs = "TBD"
 lammps = "TBD"

@@ -34,14 +34,19 @@ Exact Python package versions: `requirements-lock.txt`.
 - Jobs are limited to 15 min walltime 08:00–20:00; longer runs only at night
   or weekends, or with permission from das-sysadm@cs.vu.nl.
 - Program execution must happen on compute nodes, never on the head node.
-- `/home` is shared between fs0 and the compute nodes. Cross-node file
-  visibility latency is unmeasured (step 6).
-- Python 3.12.11 exists on fs0 as `python3.12`; the default `python3` is
-  3.6.8. Not yet checked on the compute nodes.
-- Compute nodes: 24-core EPYC, 128 GB, 100G Ethernet (VU cluster, 34 nodes).
-  Slurm counts 48 CPUs per `defq` node (probably SMT; `probe-node.sbatch`
-  checks) and reports no memory, so jobs must not pass `--mem`. Every `defq`
-  node has at least one GPU.
+- `/home` is shared between fs0 and the compute nodes (NFSv3, default
+  attribute caching). Another node sees a renamed-in file in `os.listdir`
+  within one 20 ms poll; retrying `open()` on the known name can miss it
+  for over 20 s. Anything that waits for another node's file must list the
+  directory.
+- `python3.12` is at `/usr/bin` on fs0 (3.12.11) and on the compute nodes
+  (3.12.8); the default `python3` is 3.6.8. A venv built on fs0 runs on
+  the nodes, also when unpacked to `/local`.
+- Compute nodes: AMD EPYC 7402P, 24 cores x 2 SMT (Slurm counts 48 CPUs),
+  one NUMA node, 125 GB, 100G Ethernet (VU cluster, 34 nodes). Slurm reports
+  no memory, so jobs must not pass `--mem`. Node-local NVMe at `/local`
+  (~0.9 TB free). Soft limit of 1024 open files.
+- Every `defq` node has at least one GPU in Slurm's view.
 - No GROMACS or LAMMPS modules (login probe). Apptainer is
   installed (`/usr/bin/apptainer`). How the engines reach DAS-6 is open.
 - fs0 reaches PyPI and GitHub. `/home` quota: 4 GB soft, 5 GB hard, no file
