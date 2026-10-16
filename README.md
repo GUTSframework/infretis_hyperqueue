@@ -44,6 +44,7 @@ requirements-lock.txt   exact versions, installed by setup-venv.sh
 scripts/get-hq.sh       pinned hq binary into ./bin, for clusters without Nix
 scripts/setup-venv.sh   .venv from the lock file
 scripts/sync.sh         rsync the repo to a login node, pull runs/<site>/ back
+scripts/wait-jobs.sh    poll a login node's squeue until jobs finish, optionally pull
 scripts/das6/           DAS-6 probes: login node (read-only), one-node and two-node jobs
 sites/das6.toml         DAS-6 site knobs for the sbatch (TBD fields filled by step 6)
 ASSUMPTIONS.md          version pins and cluster assumptions
