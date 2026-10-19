@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from gutsrun.slurm import ChainError, Progress, Spec, StateError, start
+from gutsrun.slurm import ChainError, Progress, Spec, StateError, setup_logging, start
 
 CASES = {"2d": "examples/2d_potential", "lammps": "examples/water_dissociation_lammps"}
 
@@ -69,7 +69,7 @@ class InfretisRun:
         return argv
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("case", choices=sorted(CASES))
     p.add_argument("runner", choices=["bare", "gutsrun"])
@@ -86,6 +86,7 @@ def main(argv=None):
     p.add_argument("--no-submit", action="store_true",
                    help="write the spec only and print its path")
     args = p.parse_args(argv)
+    setup_logging()
 
     run = InfretisRun(CASES[args.case], args.runner, args.workers, args.steps)
     spec = Spec(root=str(Path.cwd()), site=args.site,

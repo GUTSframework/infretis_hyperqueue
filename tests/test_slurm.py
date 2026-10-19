@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from gutsrun.slurm import ChainError, Spec, start, venv_stale
+from gutsrun.slurm import ChainError, Spec, seconds, start, venv_stale
 from gutsrun_infretis.chain import InfretisRun
 from conftest import wait_for
 
@@ -95,6 +95,13 @@ def step(spec):
 @pytest.fixture
 def project(tmp_path):
     return Project(tmp_path)
+
+
+@pytest.mark.parametrize("walltime, expected", [
+    ("15", 900), ("15:30", 930), ("00:14:00", 840), ("48:00:00", 172800),
+    ("2-0", 172800), ("1-2:30", 95400), ("1-02:03:04", 93784)])
+def test_seconds_reads_slurm_walltimes(walltime, expected):
+    assert seconds(walltime) == expected
 
 
 # --- starting -----------------------------------------------------------------------
