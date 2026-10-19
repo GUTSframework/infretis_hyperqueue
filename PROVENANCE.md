@@ -1,8 +1,7 @@
 # Provenance
 
 Where the files in this repo come from, and under which terms. Checked
-2026-10-16. The repo itself has **no licence yet** (decision pending; see
-the vault TODO).
+2026-10-16. The repo itself has **no licence yet** (decision pending).
 
 ## Summary
 

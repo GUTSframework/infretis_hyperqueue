@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Sync this repo with a cluster login node (plan decision 12: rsync, no remote).
+# Sync this repo with a cluster login node: rsync, so the cluster needs no
+# git remote and the laptop's uncommitted changes can be tried.
 #
 # Usage: scripts/sync.sh <host> [push|pull|both]    (default: both)
 #

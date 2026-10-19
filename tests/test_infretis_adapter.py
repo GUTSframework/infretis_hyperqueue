@@ -162,7 +162,7 @@ def test_launcher_through_hq(hq_cluster, tmp_path):
 def test_exact_lammps_workers_1(tmp_path):
     """With one worker the run is sequential and every random number comes
     from the seeded state in md_items, so bare infretis and gutsrun must
-    give byte-identical output (review S7). Not 2d_potential: its ASE
+    give byte-identical output. Not 2d_potential: its ASE
     engine draws velocities from NumPy's unseeded global RNG."""
     common = ["--workers", "1", "--steps", "8"]
     run("water_dissociation_lammps", tmp_path / "bare", *common)

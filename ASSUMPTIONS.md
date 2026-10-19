@@ -1,13 +1,13 @@
 # Assumptions
 
-What this repo takes as given. If one turns out wrong, record it in the vault
-(`projects/guts/log/`) and update this file.
+What this repo takes as given. If one turns out wrong, update this file
+(and record what happened in the project's notes).
 
 ## Version pins
 
 | What | Pin | Why |
 |---|---|---|
-| infretis | git `a42e039` (main, 2026-05-26; reports version 2026.1.1) | PyPI 2026.1.1 and `main` differ in move physics; infentory installs from `main` (review S11) |
+| infretis | git `a42e039` (main, 2026-05-26; reports version 2026.1.1) | PyPI 2026.1.1 and `main` differ in move physics; infentory installs from `main` (the code and the measurements name one version) |
 | inftools | git `ca33eae` (main, 2026-09-25) | `infinit`, WHAM analysis |
 | Python | 3.12 | infretis pins numpy < 2; numpy 1.26.4 has no 3.13 wheel |
 | numpy | 1.26.4 | from infretis (`^1.21.2`) |
@@ -20,8 +20,9 @@ Exact Python package versions: `requirements-lock.txt`.
 
 ## Runtime design
 
-- One HQ task per MC move by default. Warm workers per pin only if decision
-  point D1 (step 5) says so.
+- One HQ task per MC move by default. Long-running "warm" workers per pin
+  only if starting a task (mostly Python imports) turns out to cost more
+  than 10 % of a real MD move; open until real-size MD moves are measured.
 - `restart.toml` is the only restart authority: no HQ `--journal` for chained
   runs, a fresh `HQ_SERVER_DIR` per Slurm job.
 - No infretis fork: a launcher replaces `ProcessPoolExecutor` at run time.
@@ -30,9 +31,8 @@ Exact Python package versions: `requirements-lock.txt`.
 
 ## DAS-6 (development)
 
-What the code and job scripts rely on. Measured facts and numbers (nodes,
-storage, NFS timings, cold start): vault note
-`notes/2026-10-16-das-6-compute-nodes-and-home-nfs.md`.
+What the code and job scripts rely on, measured on DAS-6 or reported by
+its admins.
 
 - We have an account. The login node is reachable only from a university
   network or through eduVPN.
@@ -52,7 +52,8 @@ storage, NFS timings, cold start): vault note
 - `/usr/bin/python3.12` exists on fs0 and the compute nodes (patch levels
   differ); the default `python3` is 3.6.8. The venv is built on fs0.
 - Workers run a node-local copy of the venv, unpacked to `/local` at job
-  start (plan decision 15), so everything is called as `python -m`:
+  start (0.15–0.3 s faster per task start than from `/home`, 2 s to unpack
+  per job), so everything is called as `python -m`:
   entry-point scripts keep the `/home` venv in their shebang.
 - Node-local disk at `/local` (NVMe); shared scratch at `/var/scratch/$USER`
   (40 GB quota); `/home` has a 5 GB quota.

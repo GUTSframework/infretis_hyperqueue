@@ -3,17 +3,20 @@
     python -m gutsrun_infretis.launcher -i infretis.toml --backend local
     python -m gutsrun_infretis.launcher -i restart.toml --backend hq --cores-per-task 2
 
-Run it in the infretis run directory, like `infretisrun`. What it changes
-(review items in the vault's 2026-10-14 review log):
+Run it in the infretis run directory, like `infretisrun`. What it changes,
+for this run only (infretis itself stays unmodified):
 
 - `concurrent.futures.ProcessPoolExecutor` is replaced by a factory that
-  returns a gutsrun TaskExecutor (S12). infretis looks it up at call time.
+  returns a gutsrun TaskExecutor. infretis looks it up at call time, so
+  no fork of infretis is needed.
 - `restart.toml` is written via temp + rename, and backed up and
-  parse-checked at start (B2).
-- SIGTERM/SIGINT wait out a running `treat_output`, then stop: in-flight
-  moves are cancelled and redone after restart from their `locked` entry
-  (B2).
-- The parent's `as_completed` loop sleeps instead of spinning (S3).
+  parse-checked at start: infretis writes it in place, so a kill during
+  the write can leave a truncated file, the only one to restart from.
+- SIGTERM/SIGINT wait out a running `treat_output` (which updates the
+  paths and restart.toml together), then stop: in-flight moves are
+  cancelled and redone after restart from their `locked` entry.
+- The parent's `as_completed` loop sleeps instead of spinning (infretis's
+  loop keeps a core 92 % busy).
 - Under HQ, `-pin`/`-pinoffset`/`-pinstride` are removed from `wmdrun`
   (HQ places tasks), and `-ntomp` must equal --cores-per-task (HQ sets
   OMP_NUM_THREADS to it; GROMACS aborts on a mismatch).
@@ -251,7 +254,8 @@ def strip_pinning(wmdrun: list, cores: int) -> list:
 
 
 def check_restart_file(inp: str):
-    """Back up restart.toml and make sure it parses (B2)."""
+    """Back up restart.toml and make sure it parses: a truncated file would
+    otherwise only show when infretis fails to restart."""
     path = Path("restart.toml")
     if not path.exists():
         return
