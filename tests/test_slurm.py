@@ -221,12 +221,23 @@ def test_sbatch_missing_or_refusing(project, monkeypatch):
     with pytest.raises(ChainError, match="no sbatch on PATH"):
         start(spec)
     assert not spec.dir.exists()  # nothing written
-    project.use_fakes(monkeypatch)
+    project.use_fakes(monkeypatch, squeue="")
+    first = start(spec)
+    spec.stop_file.touch()  # the first chain was stopped
     (project.fakebin / "sbatch").write_text(
         "#!/usr/bin/env bash\necho 'sbatch: error: invalid partition specified' >&2\nexit 1\n")
-    with pytest.raises(ChainError, match="sbatch refused link 1: .*invalid partition"):
+    with pytest.raises(ChainError, match="sbatch refused link 1, nothing submitted: .*partition"):
+        start(dataclasses.replace(spec, site="test", name="typo"))
+    # status still reports on the first chain, as before the refused submit.
+    assert load_spec(project.rundir).name == "r" and spec.stop_file.exists()
+    assert [(e["event"], e.get("job")) for e in events(spec)] == [
+        ("chain", None), ("submitted", first)]
+    assert status(spec).over == "stopped by request; `submit` again to continue"
+    # A first chain that sbatch refuses leaves no spec and no chain behind.
+    shutil.rmtree(spec.dir)
+    with pytest.raises(ChainError, match="sbatch refused"):
         start(spec)
-    assert [e["event"] for e in events(spec)] == ["chain", "not submitted"]
+    assert not spec.path.exists() and events(spec) == []
 
 
 def test_a_new_chain_waits_for_the_last_to_leave_the_queue(project, monkeypatch):
@@ -285,7 +296,7 @@ def test_failure_cancels_the_next_link(project):
     spec = project.spec(fail_at=3)
     rc, out = project.link(spec, 1)
     assert rc == 1
-    assert "workload failed (exit 1) at step 2 of 5" in out
+    assert "workload failed (exit 1); run: step 2 of 5" in out
     assert project.calls("scancel") == ["scancel 1001"]
 
 
@@ -392,12 +403,12 @@ def test_why_a_chain_is_over(project):
 
     walltime = [submitted(1), started(1), submitted(2), ended(1, "stopped at the walltime")]
     assert why_over(spec, [{"event": "chain"}]) == "no link was submitted"
-    assert why_over(spec, [{"event": "chain"}, {"event": "not submitted", "link": 1,
-                                                 "error": "invalid partition"}]) == (
-        "link 1 was not submitted: invalid partition")
     assert why_over(spec, [submitted(1), started(1), ended(1, "done")]) == "the run is done"
     assert why_over(spec, [*walltime, started(2), ended(2, "stopped at the walltime")]) == (
         "all 2 links ran; `submit` again to continue")
+    assert why_over(dataclasses.replace(spec, links=1),
+                    [submitted(1), started(1), ended(1, "stopped at the walltime")]) == (
+        "its only link ran; `submit` again to continue")
     assert why_over(spec, [*walltime, started(2), ended(2, "failed (exit 1)")]) == (
         f"link 2: failed (exit 1); see {spec.dir}/link2-2.out")
     # The last link, not the last "ended" event, says why.
@@ -446,7 +457,7 @@ def test_a_stopped_chain_cancels_its_next_link_and_runs_no_more(project):
     proc.send_signal(signal.SIGTERM)
     out, _ = proc.communicate(timeout=60)
     assert proc.returncode == 0, out
-    assert "the chain was stopped" in out
+    assert "stopped by request; run: step" in out
     assert project.calls("scancel") == ["scancel 1001"]
     rc, out = project.link(spec, 2)
     assert rc == 0 and "not running" in out

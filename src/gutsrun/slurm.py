@@ -281,10 +281,20 @@ def note(spec: Spec, event: str, **fields: Any) -> None:
 
 
 def events(spec: Spec) -> list[dict[str, Any]]:
-    """The record of the chain last started: events since its "chain" event."""
+    """The record of the chain last started: events since its "chain" event.
+    A chain whose link 1 sbatch refused never started: its "chain" event
+    and the "not submitted" one that follows it are left out."""
     if not spec.record.exists():
         return []
-    entries = [json.loads(line) for line in spec.record.read_text().splitlines() if line]
+    entries = []
+    for line in spec.record.read_text().splitlines():
+        if not line:
+            continue
+        entry = json.loads(line)
+        if entry["event"] == "not submitted" and entries and entries[-1]["event"] == "chain":
+            entries.pop()
+        else:
+            entries.append(entry)
     starts = [i for i, e in enumerate(entries) if e["event"] == "chain"]
     return entries[starts[-1]:] if starts else entries
 
@@ -513,13 +523,20 @@ def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
     """Check (see `check()`) and save a new chain in an existing run
     directory and submit its first link; returns the job id. With
     `submit_first=False`, returns the spec's path instead, to run
-    `python -m gutsrun.slurm link <spec> 1` by hand. If sbatch refuses
-    link 1, notes that in the record and raises ChainError."""
+    `python -m gutsrun.slurm link <spec> 1` by hand.
+
+    If sbatch refuses link 1, puts the previous chain's spec and stop file
+    back, so that `status` still reports on that chain, and raises
+    ChainError. No job of the previous chain is left to read them (see
+    `check()`); the new spec cannot be written only once link 1 is
+    accepted, since link 1 may start and read it at once."""
     plan = check(spec, night, submitting=submit_first)
     if plan.pack:
         log.info("packing .venv into bin/venv.tar")
         pack_venv(spec.root)
     spec.dir.mkdir(exist_ok=True)
+    previous = spec.path.read_bytes() if spec.path.exists() else None
+    was_stopped = spec.stop_file.exists()
     spec.stop_file.unlink(missing_ok=True)
     spec.save()
     # Noted before submitting: link 1 may start, and note "started", at once.
@@ -533,7 +550,13 @@ def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
         error = (e.stderr or "").strip() if isinstance(e, subprocess.CalledProcessError) else ""
         error = error or str(e)
         note(spec, "not submitted", link=1, error=error)
-        raise ChainError(f"sbatch refused link 1: {error}") from e
+        if previous is None:
+            spec.path.unlink()
+        else:
+            spec.path.write_bytes(previous)
+        if was_stopped:
+            spec.stop_file.touch()
+        raise ChainError(f"sbatch refused link 1, nothing submitted: {error}") from e
 
 
 @dataclass
@@ -553,16 +576,13 @@ class Report:
 
 def why_over(spec: Spec, record: list[dict[str, Any]]) -> str:
     """Why a chain with no job left is over, from its record: the run is
-    done, the chain was stopped or never submitted, or else what happened
-    to its last link."""
+    done, the chain was stopped, or else what happened to its last link."""
     ended = {(e["link"], e["job"]): e for e in record if e["event"] == "ended"}
     started = {(e["link"], e["job"]): e for e in record if e["event"] == "started"}
     if any(e["result"].startswith("done") for e in ended.values()):
         return "the run is done"
     if spec.stop_file.exists():
         return "stopped by request; `submit` again to continue"
-    if refused := [e for e in record if e["event"] == "not submitted"]:
-        return f"link {refused[-1]['link']} was not submitted: {refused[-1]['error']}"
     jobs = list(dict.fromkeys((e["link"], e["job"]) for e in record
                               if e["event"] in ("submitted", "started")))
     if not jobs:
@@ -572,7 +592,8 @@ def why_over(spec: Spec, record: list[dict[str, Any]]) -> str:
     if (link, job) in ended:
         result = ended[(link, job)]["result"]
         if result == "stopped at the walltime" and link >= spec.links:
-            return f"all {spec.links} links ran; `submit` again to continue"
+            ran = "its only link ran" if spec.links == 1 else f"all {spec.links} links ran"
+            return f"{ran}; `submit` again to continue"
         return f"link {link}: {result}; see {log_file}"
     if (link, job) in started:
         return (f"link {link} gone without a word after starting on "
@@ -797,14 +818,14 @@ def run_link(spec_path: str | Path, link: int) -> int:
             return end(0, "done", progress.text)
         if exit_code == EXIT_STOPPED:
             if spec.stop_file.exists():
-                log.info(f"stopped at {progress.text}; the chain was stopped")
+                log.info(f"stopped by request; run: {progress.text}")
                 cancel_next("chain stopped")
                 return end(0, "stopped by request", progress.text)
             then = (f"link {link + 1} continues" if next_job
                     else f"no further link (links={spec.links})")
-            log.info(f"stopped at {progress.text}; {then}")
+            log.info(f"stopped at the walltime; run: {progress.text}; {then}")
             return end(0, "stopped at the walltime", progress.text)
-        log.info(f"workload failed (exit {exit_code}) at {progress.text}; chain stops")
+        log.info(f"workload failed (exit {exit_code}); run: {progress.text}; chain stops")
         cancel_next("failed")
         return end(1, f"failed (exit {exit_code})", progress.text)
     except Exception as e:
