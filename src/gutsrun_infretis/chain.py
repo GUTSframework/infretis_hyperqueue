@@ -5,7 +5,7 @@ From a cluster's login node:
     cd <run directory>          # infretis.toml, load/, the engine's inputs
     gutsrun-infretis submit --site das6 --time 00:14:00 --links 20
     gutsrun-infretis submit --check     # the checks and the sbatch command only
-    gutsrun-infretis status [--follow]
+    gutsrun-infretis status [--follow | --json]
     gutsrun-infretis stop
 
 Each link runs the gutsrun launcher (`gutsrun_infretis.launcher`) with HQ,
@@ -22,10 +22,11 @@ including each link's log, go to .gutsrun/ there.
 # Standard library only: a link imports this module to read the run's state.
 
 import argparse
+import json
 import shlex
 import sys
 import tomllib
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -163,9 +164,15 @@ def main(argv: list[str] | None = None) -> None:
     stat.add_argument("rundir", nargs="?", type=Path, default=Path.cwd())
     stat.epilog = ("exit status: 0 once no job of the chain is queued or running, "
                    f"{EXIT_ACTIVE} while some are (or squeue does not answer)")
-    stat.add_argument("--follow", action="store_true",
-                      help="print it again when a link's state changes, and every 5 minutes "
-                           "while the run progresses, until the chain ends")
+    how = stat.add_mutually_exclusive_group()
+    how.add_argument("--follow", action="store_true",
+                     help="print it again when a link's state changes, and every 5 minutes "
+                          "while the run progresses, until the chain ends")
+    how.add_argument("--json", action="store_true",
+                     help="print one JSON object, for scripts: progress, links, states "
+                          "(per link, its state without times: compare these to spot "
+                          "changes), over (null while active), active, and lines (the "
+                          "report as text)")
     stat.add_argument("--interval", type=float, default=30, help="seconds between checks")
 
     halt = commands.add_parser("stop", help="stop the chain in the run directory")
@@ -187,7 +194,10 @@ def main(argv: list[str] | None = None) -> None:
                 follow(spec, args.interval)
             else:
                 report = status(spec)
-                print(*report.lines(), sep="\n")
+                if args.json:
+                    print(json.dumps({**asdict(report), "lines": report.lines()}))
+                else:
+                    print(*report.lines(), sep="\n")
                 sys.exit(EXIT_ACTIVE if report.active else 0)
         else:
             print(*stop(load_spec(args.rundir)), sep="\n")

@@ -559,11 +559,19 @@ def test_status_exit_code_says_whether_the_chain_is_active(project, monkeypatch,
     with pytest.raises(SystemExit) as stopped:
         cli.main(["status", str(project.rundir)])
     assert stopped.value.code == cli.EXIT_ACTIVE
+    capsys.readouterr()
     project.use_fakes(monkeypatch, squeue="")
     with pytest.raises(SystemExit) as stopped:
         cli.main(["status", str(project.rundir)])
     assert stopped.value.code == 0
-    assert "cancelled before it started" in capsys.readouterr().out
+    text = capsys.readouterr().out
+    assert "cancelled before it started" in text
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["status", "--json", str(project.rundir)])
+    assert stopped.value.code == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["lines"] == text.splitlines()
+    assert report["states"] == ["1 cancelled"] and report["active"] is False
 
 
 def test_bench_workload_imports_from_bench(project):

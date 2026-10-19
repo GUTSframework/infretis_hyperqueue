@@ -10,10 +10,11 @@
 # - With job ids, or none: `squeue`, for those jobs or all of yours there.
 #   When none is left it prints the jobs' final state (sacct, if the site
 #   keeps accounting).
-# - With --run: `gutsrun-infretis status <rundir>` for the chain in <rundir>
-#   (relative to $REMOTE_DIR, default infretis_hyperqueue, or absolute),
-#   until none of the chain's jobs is queued or running. A chain submits new
-#   jobs as it goes, so its job ids are not known in advance.
+# - With --run: `gutsrun-infretis status --json <rundir>` for the chain in
+#   <rundir> (relative to $REMOTE_DIR, default infretis_hyperqueue, or
+#   absolute), until none of the chain's jobs is queued or running. A chain
+#   submits new jobs as it goes, so its job ids are not known in advance.
+#   Needs jq (in `nix develop`).
 #
 # With --pull it then runs `scripts/sync.sh <host> pull`. Gives up after
 # $MAX_WAIT s (default 1800; 43200 with --run) or 5 failed ssh calls in a
@@ -37,10 +38,11 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 
 # -q hides ssh's own warnings; the remote $USER is expanded on the remote side.
 if [ -n "$rundir" ]; then
+    command -v jq >/dev/null || { echo "wait-jobs.sh --run needs jq (nix develop)" >&2; exit 1; }
     max_wait="${MAX_WAIT:-43200}"
     # gutsrun-infretis status exits 0 once no job of the chain is left, 10 while
     # some are (or squeue does not answer).
-    query="cd $(printf %q "$remote_dir") && .venv/bin/gutsrun-infretis status $(printf %q "$rundir")"
+    query="cd $(printf %q "$remote_dir") && .venv/bin/gutsrun-infretis status --json $(printf %q "$rundir")"
     what="chain in $rundir"
 elif [ -n "$jobs" ]; then
     max_wait="${MAX_WAIT:-1800}"
@@ -69,12 +71,11 @@ while :; do
             exit 1
         fi
         if [ -n "$rundir" ]; then
-            # The links' states: without the progress line and the jobs' times.
-            new_key="$(tail -n +2 <<<"$out" |
-                sed -E 's/^(link +[0-9]+ +job +[^ ]+ +[A-Z]+) [0-9:-]+/\1/')"
+            # The links' states, without times and steps.
+            new_key="$(jq -c .states <<<"$out")"
             if [ "$new_key" != "$key" ] || [ "$rc" = 0 ]; then
                 echo "$(date +%H:%M:%S)"
-                sed 's/^/    /' <<<"$out"
+                jq -r '.lines[]' <<<"$out" | sed 's/^/    /'
                 key="$new_key"
             fi
             [ "$rc" = 0 ] && break

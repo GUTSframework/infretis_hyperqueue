@@ -37,6 +37,7 @@
           pkgs.lammps    # water_dissociation; built with REAXFF + QEQ
           pkgs.ruff      # lint (pyproject.toml [tool.ruff])
           pkgs.pyright   # type check (pyproject.toml [tool.pyright])
+          pkgs.jq        # scripts/wait-jobs.sh --run reads `status --json`
         ];
         # Let pip wheels (numpy, mdtraj, the hyperqueue client) find libstdc++
         # and zlib on NixOS.

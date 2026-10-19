@@ -63,7 +63,8 @@ the run continues normally with the next `submit`.
 
 (The examples call it by its path once; with `.venv/bin` on your `PATH`,
 `gutsrun-infretis` is enough.) `status` exits with 0 once none of the
-chain's jobs is queued or running, and 10 while some are, for scripts.
+chain's jobs is queued or running, and 10 while some are, for scripts;
+`status --json` prints the report as JSON for them (keys in `--help`).
 From another machine, `scripts/wait-jobs.sh <host> --run <rundir>` waits
 over ssh until the chain is over.
 
