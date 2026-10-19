@@ -38,7 +38,8 @@ Each link:
    With `nodes` > 1, starts one HQ worker on each of the job's other nodes
    too, in one srun step (`worker` below): each unpacks its own venv copy
    first if the site uses one, at the same path as on the first node, since
-   tasks run with the workload's interpreter.
+   tasks run with the workload's interpreter. At the end of the link,
+   stopping the server ends these workers, and each removes its copy.
 6. Runs the workload's command in the run directory, passing SIGTERM and
    SIGINT on. Slurm sends SIGTERM `margin` seconds before the walltime
    (`--signal=B:TERM@margin`), and may send it up to 60 s earlier than asked.
@@ -462,7 +463,11 @@ def hq_server(root: str | Path, server: Path, log_prefix: str, cores: int) -> It
 def hq_workers_elsewhere(spec: Spec, link: int, server: Path, cores: int) -> Iterator[None]:
     """One HQ worker on each of the job's other nodes for the `with` block:
     one srun step that runs `worker` there (see `run_worker`). Stops them
-    when the block ends: srun passes SIGTERM on to each node's `worker`."""
+    when the block ends by stopping the HQ server: each worker then exits
+    and its `worker` removes the node's venv copy. srun does not pass
+    SIGTERM on (it kills the step), so it is signalled only if the step
+    does not end by itself."""
+    hq = hq_binary(spec.root)
     others = spec.nodes - 1
     python = str(Path(spec.root) / ".venv" / "bin" / "python")
     # --relative=1: the nodes after the first, which runs this link.
@@ -476,12 +481,18 @@ def hq_workers_elsewhere(spec: Spec, link: int, server: Path, cores: int) -> Ite
     try:
         yield
     finally:
-        step.send_signal(signal.SIGTERM)
+        subprocess.run([hq, "server", "stop", "--server-dir", str(server)],
+                       capture_output=True)
         try:
-            step.wait(timeout=30)
+            step.wait(timeout=60)
         except subprocess.TimeoutExpired:
-            step.kill()
-            step.wait()
+            log.info("hq workers on the other nodes still running after 60 s; ending srun")
+            step.send_signal(signal.SIGTERM)
+            try:
+                step.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                step.kill()
+                step.wait()
         log.info(f"hq workers on the other nodes: srun exit {step.returncode}")
 
 
@@ -889,7 +900,8 @@ def run_worker(spec_path: str | Path, link: int, server: Path) -> int:
     """On one of a link's other nodes (in its srun step): unpack the venv
     copy if the site uses one, at the same path as on the link's first node,
     since tasks run with the workload's interpreter; wait for the HQ server;
-    run an HQ worker on all cores until SIGTERM. Removes the copy at the end."""
+    run an HQ worker on all cores until the link stops the server (or
+    SIGTERM). Removes the copy at the end."""
     host = socket.gethostname()
     forwarder = Forwarder(f"the hq worker on {host}")
     spec = Spec.load(spec_path)
@@ -911,11 +923,14 @@ def run_worker(spec_path: str | Path, link: int, server: Path) -> int:
                                          "--cpus", str(site.cores)], stdout=out)
             log.info(f"{host}: hq worker started")
             code = child.wait()
-            log.info(f"{host}: hq worker exit {code}")
+            # The link ends its workers by stopping the server; HQ exits 1 then.
+            stopped = subprocess.run([hq, "server", "info", "--server-dir", str(server)],
+                                     capture_output=True).returncode != 0
+            log.info(f"{host}: hq worker exit {code}" + (", server stopped" if stopped else ""))
     except ChainError as e:
         log.info(f"{host}: {e}")
         return 1
-    return 0 if forwarder.received else code
+    return 0 if forwarder.received or stopped else code
 
 
 def main(argv: list[str] | None = None) -> int:

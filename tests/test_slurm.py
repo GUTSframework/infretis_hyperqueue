@@ -70,13 +70,18 @@ FAKE_SQUEUE = """\
 printf '%s\\n' "$FAKE_SQUEUE"
 """
 # Runs the step's command here, once, as if on one other node: with its own
-# node-local disk ($FAKE_NODE_DISK), as each node has.
+# node-local disk ($FAKE_NODE_DISK), as each node has. Like srun, it does not
+# pass SIGTERM on: it kills the step.
 FAKE_SRUN = """\
 #!/usr/bin/env bash
 echo "srun $*" >> "$FAKE_LOG"
 while [ "${1#-}" != "$1" ]; do shift; done
 [ -n "${FAKE_NODE_DISK:-}" ] && export GUTSRUN_LOCAL_DISK="$FAKE_NODE_DISK"
-exec "$@"
+trap 'echo "srun: forcing job termination"; kill -KILL "$child"' TERM
+"$@" &
+child=$!
+while kill -0 "$child" 2>/dev/null; do wait "$child"; rc=$?; done
+exit "$rc"
 """
 FAKE_HQ = '#!/usr/bin/env bash\necho "hyperqueue v0.26.2"\n'
 
@@ -549,7 +554,9 @@ def test_hq_workers_on_the_other_nodes(tmp_path):
     for part in ["--nodes=1", "--ntasks=1", "--ntasks-per-node=1", "--relative=1",
                  "--cpus-per-task=2", f"-m gutsrun.slurm worker {spec.path} 1 "]:
         assert part in srun
-    assert "hq worker started" in out and "hq worker exit" in out
+    assert "hq worker started" in out
+    assert "hq worker exit 1, server stopped" in out  # the worker was not killed
+    assert "srun exit 0" in out
     assert list(spec.dir.glob("link1-4242-hq-worker-*.log"))
     assert "venv unpacked to " + str(node_disk) in out  # the other node's own copy
     assert list(node_disk.iterdir()) == []  # and removed at the end
