@@ -27,8 +27,8 @@ for this run only (infretis itself stays unmodified):
 - `gutsrun-timings.jsonl`: per-move timings (see gutsrun.executor).
 
 Exit codes: 0 = all steps done, 3 = stopped by a signal (restart from
-restart.toml), 4 = infretis refused to start (see sim.log: nothing left
-to do, or an active path's files are missing), other = error.
+restart.toml), 4 = infretis refused to start (the reason and what to do
+on stderr and in gutsrun.log), other = error.
 
 Parts of this file are adapted from infretis (https://github.com/infretis/infretis,
 commit a42e039; see PROVENANCE.md), which carries this licence:
@@ -287,6 +287,34 @@ def check_restart_file(inp: str) -> None:
         log.warning("restart.toml exists but input is %s; infretis will refuse", inp)
 
 
+def why_refused(inp: str) -> str:
+    """Why setup_config returned None, and what to do: its checks, redone
+    on the input file (it changes only its in-memory copy)."""
+    if not os.path.isfile(inp):
+        return f"{inp} not found"
+    config = tomli.loads(Path(inp).read_text())
+    current = config.get("current")
+    if current is None:
+        return "see sim.log"
+    cstep = current.get("cstep")
+    if cstep == current.get("restarted_from", -1):
+        # infretis saves restarted_from only with a restart.toml, which a
+        # launch writes after a move or when it finds the run done.
+        return (f"in {inp}, cstep and restarted_from are both {cstep}: the last launch "
+                f"from it ran no steps, as when a finished run is launched again. "
+                f"To continue: set [simulation] steps above {cstep} and delete the line "
+                f"`restarted_from = {cstep}` under [current] in {inp} "
+                f"(restart.toml.bak.{cstep} has a copy). With steps at {cstep} or "
+                f"below, the run is done.")
+    load_dir = config["simulation"].get("load_dir", "trajs")
+    missing = [path for act in current["active"]
+               if not os.path.isfile(path := os.path.join(load_dir, str(act), "traj.txt"))]
+    if missing:
+        return (f"active paths are missing their files: {', '.join(missing)}; "
+                f"{inp} needs the {load_dir}/ that was saved with it")
+    return "see sim.log"
+
+
 # --- main -------------------------------------------------------------------------
 
 
@@ -334,7 +362,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = setup_config(args.input)
         if config is None:
-            log.warning("infretis refused to start (setup_config returned None)")
+            reason = why_refused(args.input)
+            log.warning("infretis refused to start: %s", reason)
+            print(f"infretis refused to start: {reason}", file=sys.stderr)
             return EXIT_REFUSED
         if args.backend == "hq" and "wmdrun" in config["runner"]:
             config["runner"]["wmdrun"] = strip_pinning(config["runner"]["wmdrun"],

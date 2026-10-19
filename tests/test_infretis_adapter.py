@@ -24,6 +24,7 @@ from conftest import wait_for  # noqa: E402
 from gutsrun.backends.local import LocalBackend  # noqa: E402
 from gutsrun_infretis.launcher import (  # noqa: E402
     EXIT_DONE,
+    EXIT_REFUSED,
     EXIT_STOPPED,
     HOLD_ENV,
     InfretisExecutor,
@@ -224,3 +225,34 @@ def test_infretis_setup_is_imported_before_the_rest_of_infretis(module, first):
              if isinstance(node, ast.Import | ast.ImportFrom)]
     ours = [n for n in names if n.split(".")[0] in ("infretis", "gutsrun_infretis")]
     assert ours[0] == first
+
+
+def test_relaunched_finished_run_refused_with_a_way_out(tmp_path):
+    """Launching a finished run saves restarted_from = cstep; infretis then
+    refuses to continue it with more steps. The message says how to undo
+    that, and doing so continues the run."""
+    import tomli
+    import tomli_w
+
+    rd = tmp_path / "run"
+    prepare("2d_potential", rd, workers=2, steps=6)
+    for inp in ("infretis.toml", "restart.toml"):  # finish, then launch again
+        out, _ = launch(rd, "-i", inp).communicate(timeout=600)
+    config = tomli.loads((rd / "restart.toml").read_text())
+    cstep = config["current"]["cstep"]
+    assert config["current"]["restarted_from"] == cstep
+    config["simulation"]["steps"] = cstep + 4
+    (rd / "restart.toml").write_text(tomli_w.dumps(config))
+
+    proc = launch(rd, "-i", "restart.toml")
+    out, _ = proc.communicate(timeout=600)
+    assert proc.returncode == EXIT_REFUSED, out
+    assert f"delete the line `restarted_from = {cstep}` under [current]" in out
+
+    del config["current"]["restarted_from"]
+    (rd / "restart.toml").write_text(tomli_w.dumps(config))
+    proc = launch(rd, "-i", "restart.toml")
+    out, _ = proc.communicate(timeout=600)
+    assert proc.returncode == EXIT_DONE, out
+    nums = path_numbers(rd)
+    assert len(nums) == len(set(nums)), "duplicate path numbers after restart"
