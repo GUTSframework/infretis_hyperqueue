@@ -36,8 +36,9 @@ Each link:
 6. Runs the workload's command in the run directory, passing SIGTERM and
    SIGINT on. Slurm sends SIGTERM `margin` seconds before the walltime
    (`--signal=B:TERM@margin`), and may send it up to 60 s earlier than asked.
-7. Cancels the next link if the run is done, failed or stopped. A workload
-   exits with EXIT_STOPPED when a signal stopped it and it can continue.
+7. Cancels the next link if the run is done, failed or stopped, or the link
+   itself crashed. A workload exits with EXIT_STOPPED when a signal stopped
+   it and it can continue.
 
 Everything the chain writes goes to <rundir>/.gutsrun/: chain.json (the
 spec), links.jsonl (what happened: one JSON object per line), the link logs
@@ -258,8 +259,11 @@ def revision(root: str | Path) -> str:
     path = Path(root) / "REVISION"
     if path.exists():
         return path.read_text().strip()
-    out = subprocess.run(["git", "-C", str(root), "describe", "--always", "--dirty"],
-                         capture_output=True, text=True)
+    try:
+        out = subprocess.run(["git", "-C", str(root), "describe", "--always", "--dirty"],
+                             capture_output=True, text=True)
+    except OSError:  # no git
+        return "unknown"
     return out.stdout.strip() or "unknown"
 
 
@@ -641,6 +645,7 @@ class Forwarder:
     def __init__(self) -> None:
         self.child: subprocess.Popen[bytes] | None = None
         self.received: str | None = None
+        self.forwarded = False
         for signum in (signal.SIGTERM, signal.SIGINT):
             signal.signal(signum, self.handle)
 
@@ -648,7 +653,20 @@ class Forwarder:
         self.received = signal.Signals(signum).name
         log.info(f"{self.received}: stopping the workload")
         if self.child is not None:
+            self.forwarded = True
             self.child.send_signal(signum)
+
+    def start(self, argv: list[str], cwd: Path | None = None,
+              env: dict[str, str] | None = None) -> subprocess.Popen[bytes]:
+        """Start the workload. A signal that arrives while it starts, after
+        `received` was last checked but before `child` is set, is passed
+        on here; only once, since the launcher treats a second SIGTERM as a
+        new request."""
+        child = self.child = subprocess.Popen(argv, cwd=cwd, env=env)
+        if self.received is not None and not self.forwarded:
+            self.forwarded = True
+            child.send_signal(signal.Signals[self.received])
+        return child
 
 
 def run_link(spec_path: str | Path, link: int) -> int:
@@ -670,89 +688,98 @@ def run_link(spec_path: str | Path, link: int) -> int:
         note(spec, "ended", link=link, job=job, exit=code, result=result, progress=progress)
         return code
 
-    if spec.stop_file.exists():
-        log.info("the chain was stopped; not running")
-        return end(0, "not run: chain stopped", "")
-    if link > 1:
-        try:
-            progress = workload.progress(rundir)
-        except StateError as e:
-            log.info(f"{e}; chain stops")
-            return end(1, "unreadable state", str(e))
-        if progress.done:
-            log.info(f"done: {progress.text}")
-            return end(0, "done before it ran", progress.text)
-        log.info(f"continuing at {progress.text}")
-        workload.before_link(rundir, link)
-
     next_job = None
-    if link < spec.links and shutil.which("sbatch"):
-        try:
-            next_job = submit(spec, site, link + 1, after=job)
-            log.info(f"next link: job {next_job} (afterany:{job})")
-        except subprocess.CalledProcessError as e:
-            log.info(f"could not submit the next link ({e.stderr.strip()}); "
-                     "this one runs anyway")
 
     def cancel_next(reason: str) -> None:
         if next_job is not None:
             subprocess.run(["scancel", next_job])
             log.info(f"cancelled next link {next_job} ({reason})")
 
-    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
-    log.info(f"open files: {soft} -> {hard}")
-
-    exit_code = EXIT_STOPPED
+    # Anything not foreseen below (a bug, a workload that raises, a missing
+    # interpreter) still ends the link in the record and cancels the next
+    # one, which would otherwise fail the same way.
     try:
-        with contextlib.ExitStack() as stack:
-            python = str(Path(spec.root) / ".venv" / "bin" / "python")
-            if site.local_venv:
-                assert site.local_disk  # Site checks it
-                python = stack.enter_context(local_venv(spec.root, site.local_disk, job))
-            env = dict(os.environ)
-            if workload.needs_hq:
-                server = spec.dir / f"hq-{job}"
-                hq_dir = stack.enter_context(hq_server(spec.root, server, log_prefix,
-                                                       site.cores))
-                env["HQ_SERVER_DIR"] = str(server)
-                env["PATH"] = os.pathsep.join([hq_dir, env.get("PATH", "")])
-            argv = workload.argv(python, rundir, link)
-            if forwarder.received:
-                log.info("not starting the workload")
-            else:
-                log.info(f"running: {shlex.join(argv)}")
-                forwarder.child = subprocess.Popen(argv, cwd=rundir, env=env)
-                exit_code = forwarder.child.wait()  # resumes after a forwarded signal
-                forwarder.child = None
-                log.info(f"workload exit {exit_code}")
-    except ChainError as e:
-        log.info(str(e))
-        cancel_next("failed")
-        return end(1, "failed", str(e))
-
-    try:
-        progress = workload.progress(rundir)
-    except StateError as e:
-        log.info(f"{e} after the run; chain stops")
-        cancel_next("failed")
-        return end(1, "unreadable state", str(e))
-    if progress.done:
-        log.info(f"done: {progress.text}")
-        cancel_next("done")
-        return end(0, "done", progress.text)
-    if exit_code == EXIT_STOPPED:
         if spec.stop_file.exists():
-            log.info(f"stopped at {progress.text}; the chain was stopped")
-            cancel_next("chain stopped")
-            return end(0, "stopped by request", progress.text)
-        then = (f"link {link + 1} continues" if next_job
-                else f"no further link (links={spec.links})")
-        log.info(f"stopped at {progress.text}; {then}")
-        return end(0, "stopped at the walltime", progress.text)
-    log.info(f"workload failed (exit {exit_code}) at {progress.text}; chain stops")
-    cancel_next("failed")
-    return end(1, f"failed (exit {exit_code})", progress.text)
+            log.info("the chain was stopped; not running")
+            return end(0, "not run: chain stopped", "")
+        if link > 1:
+            try:
+                progress = workload.progress(rundir)
+            except StateError as e:
+                log.info(f"{e}; chain stops")
+                return end(1, "unreadable state", str(e))
+            if progress.done:
+                log.info(f"done: {progress.text}")
+                return end(0, "done before it ran", progress.text)
+            log.info(f"continuing at {progress.text}")
+            workload.before_link(rundir, link)
+
+        if link < spec.links and shutil.which("sbatch"):
+            try:
+                next_job = submit(spec, site, link + 1, after=job)
+                log.info(f"next link: job {next_job} (afterany:{job})")
+            except subprocess.CalledProcessError as e:
+                log.info(f"could not submit the next link ({e.stderr.strip()}); "
+                         "this one runs anyway")
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+        log.info(f"open files: {soft} -> {hard}")
+
+        exit_code = EXIT_STOPPED
+        try:
+            with contextlib.ExitStack() as stack:
+                python = str(Path(spec.root) / ".venv" / "bin" / "python")
+                if site.local_venv:
+                    assert site.local_disk  # Site checks it
+                    python = stack.enter_context(local_venv(spec.root, site.local_disk, job))
+                env = dict(os.environ)
+                if workload.needs_hq:
+                    server = spec.dir / f"hq-{job}"
+                    hq_dir = stack.enter_context(hq_server(spec.root, server, log_prefix,
+                                                           site.cores))
+                    env["HQ_SERVER_DIR"] = str(server)
+                    env["PATH"] = os.pathsep.join([hq_dir, env.get("PATH", "")])
+                argv = workload.argv(python, rundir, link)
+                if forwarder.received:
+                    log.info("not starting the workload")
+                else:
+                    log.info(f"running: {shlex.join(argv)}")
+                    child = forwarder.start(argv, cwd=rundir, env=env)
+                    exit_code = child.wait()  # resumes after a forwarded signal
+                    forwarder.child = None
+                    log.info(f"workload exit {exit_code}")
+        except ChainError as e:
+            log.info(str(e))
+            cancel_next("failed")
+            return end(1, "failed", str(e))
+
+        try:
+            progress = workload.progress(rundir)
+        except StateError as e:
+            log.info(f"{e} after the run; chain stops")
+            cancel_next("failed")
+            return end(1, "unreadable state", str(e))
+        if progress.done:
+            log.info(f"done: {progress.text}")
+            cancel_next("done")
+            return end(0, "done", progress.text)
+        if exit_code == EXIT_STOPPED:
+            if spec.stop_file.exists():
+                log.info(f"stopped at {progress.text}; the chain was stopped")
+                cancel_next("chain stopped")
+                return end(0, "stopped by request", progress.text)
+            then = (f"link {link + 1} continues" if next_job
+                    else f"no further link (links={spec.links})")
+            log.info(f"stopped at {progress.text}; {then}")
+            return end(0, "stopped at the walltime", progress.text)
+        log.info(f"workload failed (exit {exit_code}) at {progress.text}; chain stops")
+        cancel_next("failed")
+        return end(1, f"failed (exit {exit_code})", progress.text)
+    except Exception as e:
+        log.exception("link crashed")
+        cancel_next("crashed")
+        return end(1, f"crashed: {type(e).__name__}: {e}", "")
 
 
 def main(argv: list[str] | None = None) -> int:

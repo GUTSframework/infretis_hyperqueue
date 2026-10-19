@@ -40,7 +40,9 @@ class BenchRun(InfretisRun):
 
     def before_link(self, rundir: Path, link: int) -> None:
         # Bare infretis writes restart.toml in place, so a kill can truncate it.
-        shutil.copy2(rundir / "restart.toml", rundir / f"restart.toml.link{link}")
+        # None yet if the run was stopped before its first step.
+        if (rundir / "restart.toml").exists():
+            shutil.copy2(rundir / "restart.toml", rundir / f"restart.toml.link{link}")
 
     def argv(self, python: str, rundir: Path, link: int) -> list[str]:
         argv = [python, str(BENCH / "bare_run.py"), self.example, str(rundir), "--in-place",

@@ -3,7 +3,8 @@
 `Counter` is the workload; run as a script it is the command a link runs:
 it counts `step` in <rundir>/state.json up to `steps`, one per `delay`
 seconds, exits 3 on SIGTERM and 1 at `fail_at`. Under HQ it records what
-it saw of the server in hq.json.
+it saw of the server in hq.json. With `crash`, `argv()` raises, as a
+workload with a bug would.
 """
 
 import argparse
@@ -25,6 +26,7 @@ class Counter:
     delay: float = 0.05
     fail_at: int | None = None
     needs_hq: bool = False
+    crash: bool = False
 
     def progress(self, rundir: Path) -> Progress:
         path = rundir / "state.json"
@@ -40,6 +42,8 @@ class Counter:
         (rundir / f"before{link}").touch()
 
     def argv(self, python: str, rundir: Path, link: int) -> list[str]:
+        if self.crash:
+            raise RuntimeError("boom")
         argv = [python, __file__, str(rundir), "--steps", str(self.steps),
                 "--delay", str(self.delay)]
         if self.fail_at is not None:

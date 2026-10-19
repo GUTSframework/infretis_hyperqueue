@@ -20,6 +20,7 @@ from conftest import wait_for
 import gutsrun_infretis.chain as cli
 from gutsrun.slurm import (
     ChainError,
+    Forwarder,
     Site,
     Spec,
     StateError,
@@ -27,6 +28,7 @@ from gutsrun.slurm import (
     follow,
     load_spec,
     note,
+    revision,
     seconds,
     start,
     status,
@@ -271,6 +273,42 @@ def test_failure_cancels_the_next_link(project):
     assert project.calls("scancel") == ["scancel 1001"]
 
 
+def test_a_crashing_link_ends_in_the_record_and_cancels_the_next(project):
+    spec = project.spec(crash=True)
+    rc, out = project.link(spec, 1)
+    assert rc == 1
+    assert "RuntimeError: boom" in out  # the traceback is in the link's log
+    assert project.calls("scancel") == ["scancel 1001"]
+    [ended] = [e for e in events(spec) if e["event"] == "ended"]
+    assert ended["result"] == "crashed: RuntimeError: boom"
+
+
+def test_a_signal_while_the_workload_starts_is_passed_on(monkeypatch):
+    # The signal lands after run_link checked `received`, inside Popen.
+    popen = subprocess.Popen
+
+    def popen_after_a_signal(*args, **kwargs):
+        os.kill(os.getpid(), signal.SIGTERM)
+        return popen(*args, **kwargs)
+
+    handlers = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        forwarder = Forwarder()
+        monkeypatch.setattr(subprocess, "Popen", popen_after_a_signal)
+        child = forwarder.start([sys.executable, "-c", "import time; time.sleep(30)"])
+        monkeypatch.undo()
+        assert forwarder.received == "SIGTERM"
+        assert child.wait(timeout=10) == -signal.SIGTERM
+    finally:
+        for s, handler in handlers.items():
+            signal.signal(s, handler)
+
+
+def test_revision_without_git(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert revision(tmp_path) == "unknown"
+
+
 def test_unreadable_state_stops_the_chain_before_submitting(project):
     spec = project.spec()
     (project.rundir / "state.json").write_text("{")
@@ -484,6 +522,8 @@ def test_bench_workload_imports_from_bench(project):
                 args={"example": "ex", "runner": "bare"}, root=str(project.root))
     run = spec.make_workload()
     assert not run.needs_hq
+    run.before_link(project.rundir, 2)  # no restart.toml yet: nothing to back up
+    assert not list(project.rundir.glob("restart.toml*"))
     assert run.argv("py", project.rundir, 2) == [
         "py", str(REPO / "bench" / "bare_run.py"), "ex", str(project.rundir), "--in-place",
         "--runner", "bare"]
