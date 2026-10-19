@@ -213,6 +213,20 @@ def test_start_refusals(project):
     start(spec(time="00:15:00"), night=True, submit_first=False)
 
 
+def test_sbatch_missing_or_refusing(project, monkeypatch):
+    spec = project.make_spec()
+    monkeypatch.setenv("PATH", "/nonexistent")
+    with pytest.raises(ChainError, match="no sbatch on PATH"):
+        start(spec)
+    assert not spec.dir.exists()  # nothing written
+    project.use_fakes(monkeypatch)
+    (project.fakebin / "sbatch").write_text(
+        "#!/usr/bin/env bash\necho 'sbatch: error: invalid partition specified' >&2\nexit 1\n")
+    with pytest.raises(ChainError, match="sbatch refused link 1: .*invalid partition"):
+        start(spec)
+    assert [e["event"] for e in events(spec)] == ["chain", "not submitted"]
+
+
 def test_a_new_chain_waits_for_the_last_to_leave_the_queue(project, monkeypatch):
     project.use_fakes(monkeypatch, squeue="1001 PENDING 0:00 (None)")
     spec = project.make_spec()

@@ -470,14 +470,17 @@ class Plan:
     pack: bool  # bin/venv.tar must be packed first
 
 
-def check(spec: Spec, night: bool = False) -> Plan:
+def check(spec: Spec, night: bool = False, submitting: bool = True) -> Plan:
     """Everything `start()` checks, without writing anything. Raises
     ChainError, or StateError if the run's state is unreadable. A run
     directory can take a new chain once the last one has no jobs left in
-    the queue."""
+    the queue. `submitting=False` skips the check for sbatch, for a first
+    link run by hand."""
     root = Path(spec.root)
     site = Site(root, spec.site)
     check_time(spec, site, night)
+    if submitting and not shutil.which("sbatch"):
+        raise ChainError("no sbatch on PATH; submit from the cluster's login node")
     if not Path(spec.rundir).is_dir():
         raise ChainError(f"no run directory {spec.rundir}")
     if submitted := [e["job"] for e in events(spec) if e["event"] == "submitted"]:
@@ -507,17 +510,27 @@ def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
     """Check (see `check()`) and save a new chain in an existing run
     directory and submit its first link; returns the job id. With
     `submit_first=False`, returns the spec's path instead, to run
-    `python -m gutsrun.slurm link <spec> 1` by hand."""
-    plan = check(spec, night)
+    `python -m gutsrun.slurm link <spec> 1` by hand. If sbatch refuses
+    link 1, notes that in the record and raises ChainError."""
+    plan = check(spec, night, submitting=submit_first)
     if plan.pack:
         log.info("packing .venv into bin/venv.tar")
         pack_venv(spec.root)
     spec.dir.mkdir(exist_ok=True)
     spec.stop_file.unlink(missing_ok=True)
     spec.save()
+    # Noted before submitting: link 1 may start, and note "started", at once.
     note(spec, "chain", name=spec.name, site=spec.site, time=spec.time, links=spec.links,
          revision=plan.revision, progress=plan.progress.text)
-    return submit(spec, plan.site, 1) if submit_first else str(spec.path)
+    if not submit_first:
+        return str(spec.path)
+    try:
+        return submit(spec, plan.site, 1)
+    except (subprocess.CalledProcessError, OSError) as e:
+        error = (e.stderr or "").strip() if isinstance(e, subprocess.CalledProcessError) else ""
+        error = error or str(e)
+        note(spec, "not submitted", link=1, error=error)
+        raise ChainError(f"sbatch refused link 1: {error}") from e
 
 
 @dataclass
