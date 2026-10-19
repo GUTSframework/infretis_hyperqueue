@@ -5,7 +5,9 @@
 #
 #   push  code -> <host>:$REMOTE_DIR. Deletes remote files removed here,
 #         except the excluded paths, which are never touched: the remote's
-#         own .venv/, bin/ and runs/ stay as they are.
+#         own .venv/, bin/ and runs/ stay as they are. Writes REVISION there
+#         (`git describe --always --dirty`), since .git is not copied;
+#         bench/bare_run.py records it as the run's commit.
 #   pull  <host>:$REMOTE_DIR/runs/$SITE/ -> runs/$SITE/ (adds and updates,
 #         never deletes).
 #
@@ -24,7 +26,10 @@ push() {
         --exclude .git/ --exclude .venv/ --exclude bin/ --exclude runs/ \
         --exclude work/ --exclude result --exclude __pycache__/ \
         --exclude .pytest_cache/ --exclude .claude/ --exclude .idea/ --exclude .vscode/ \
+        --exclude /REVISION \
         "$root/" "$host:$remote_dir/"
+    git -C "$root" describe --always --dirty --abbrev=7 \
+        | ssh -q "$host" "cat > '$remote_dir/REVISION'"
 }
 
 pull() {

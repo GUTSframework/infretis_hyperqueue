@@ -18,6 +18,14 @@ For GROMACS examples, `--wmdrun` is a template expanded once per worker with
 To restart a run in place (later chain links), pass `--restart`: it runs
 `infretisrun -i restart.toml` in the existing directory instead of copying.
 
+infretis runs as `python -c` with this interpreter, not through the
+`infretisrun` script, whose shebang names the venv it was installed in (a
+venv copied to node-local disk would still run the original). SIGTERM and
+SIGINT are passed on to infretis; the exit code is then 3, as the gutsrun
+launcher's, if infretis stopped or died of the signal. Bare infretis runs in
+its own process group and gets the signal there, since its
+ProcessPoolExecutor workers would otherwise outlive it.
+
 `--runner gutsrun` runs the same thing through the gutsrun launcher
 (`python -m gutsrun_infretis.launcher`) instead of `infretisrun`, with
 `--backend local|hq` and `--cores-per-task`.
@@ -37,6 +45,8 @@ from pathlib import Path
 
 import tomli
 import tomli_w
+
+EXIT_STOPPED = 3  # as gutsrun_infretis.launcher
 
 
 def parse_args():
@@ -111,13 +121,16 @@ def prepare(args):
 
 
 def git_head(path):
+    """Short commit of the repo; on a cluster copy (no .git), the REVISION file
+    written by scripts/sync.sh push."""
     try:
         return subprocess.run(
             ["git", "-C", str(path), "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, check=True,
         ).stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
+        revision = Path(path).resolve().parent / "REVISION"
+        return revision.read_text().strip() if revision.exists() else None
 
 
 def main():
@@ -131,8 +144,8 @@ def main():
 
     env = None
     if args.runner == "bare":
-        infretisrun = Path(sys.executable).with_name("infretisrun")
-        cmd = [str(infretisrun), "-i", inp]
+        cmd = [sys.executable, "-c", "from infretis.bin import infretisrun; infretisrun()",
+               "-i", inp]
     else:
         cmd = [sys.executable, "-m", "gutsrun_infretis.launcher", "-i", inp,
                "--backend", args.backend, "--cores-per-task", str(args.cores_per_task)]
@@ -140,12 +153,28 @@ def main():
         env = {**os.environ, "PYTHONPATH": os.pathsep.join(
             p for p in (src, os.environ.get("PYTHONPATH")) if p)}
     started = time.time()
-    proc = subprocess.Popen(cmd, cwd=args.rundir, env=env)
+    bare = args.runner == "bare"
+    proc = subprocess.Popen(cmd, cwd=args.rundir, env=env, start_new_session=bare)
+    stopped_by = None
+
+    def signal_run(signum):
+        try:
+            os.killpg(proc.pid, signum) if bare else proc.send_signal(signum)
+        except ProcessLookupError:
+            pass
+
+    def forward(signum, frame):
+        nonlocal stopped_by
+        stopped_by = signal.Signals(signum).name
+        signal_run(signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, forward)
     killed = False
     try:
         proc.wait(timeout=args.kill_after)
     except subprocess.TimeoutExpired:
-        proc.send_signal(signal.SIGTERM)
+        signal_run(signal.SIGTERM)
         killed = True
         proc.wait()
     wall = time.time() - started
@@ -155,6 +184,7 @@ def main():
         "wall_s": round(wall, 3),
         "returncode": proc.returncode,
         "killed_after_s": args.kill_after if killed else None,
+        "stopped_by": stopped_by,
         "command": cmd,
         "runner": args.runner,
         "backend": args.backend if args.runner == "gutsrun" else None,
@@ -176,7 +206,11 @@ def main():
     history.append(record)
     runs.write_text(json.dumps(history, indent=2) + "\n")
     print(json.dumps(record, indent=2))
-    sys.exit(0 if killed else proc.returncode)
+    if killed:
+        sys.exit(0)
+    if stopped_by and proc.returncode in (EXIT_STOPPED, -signal.Signals[stopped_by]):
+        sys.exit(EXIT_STOPPED)
+    sys.exit(proc.returncode if proc.returncode >= 0 else 128 - proc.returncode)
 
 
 if __name__ == "__main__":

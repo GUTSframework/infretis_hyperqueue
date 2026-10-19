@@ -46,6 +46,7 @@ scripts/setup-venv.sh   .venv from the lock file
 scripts/sync.sh         rsync the repo to a login node, pull runs/<site>/ back
 scripts/wait-jobs.sh    poll a login node's squeue until jobs finish, optionally pull
 scripts/das6/           DAS-6 probes: login node (read-only), one-node and two-node jobs
+scripts/das6/chain.sh   chained one-node infretis runs, one Slurm job per link (link.sbatch)
 sites/das6.toml         DAS-6 site knobs for the sbatch (TBD fields filled by step 6)
 ASSUMPTIONS.md          version pins and cluster assumptions
 PROVENANCE.md           where each file comes from, and under which terms
