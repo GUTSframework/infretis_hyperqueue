@@ -46,8 +46,7 @@ scripts/setup-venv.sh   .venv from the lock file
 scripts/sync.sh         rsync the repo to a login node, pull runs/<site>/ back
 scripts/wait-jobs.sh    poll a login node's squeue until jobs finish, optionally pull
 scripts/das6/           DAS-6 probes: login node (read-only), one-node and two-node jobs
-scripts/das6/chain.sh   chained one-node infretis runs, one Slurm job per link (link.sbatch)
-sites/das6.toml         DAS-6 site knobs for the sbatch (TBD fields filled by step 6)
+sites/das6.toml         DAS-6 site knobs for chained Slurm jobs (gutsrun.slurm)
 ASSUMPTIONS.md          version pins and cluster assumptions
 PROVENANCE.md           where each file comes from, and under which terms
 bench/bare_run.py       run bare infretis on an example, record run.json
@@ -59,8 +58,8 @@ bench/executor_roundtrip.py  round trip of a trivial call through gutsrun
 bench/step5.sh          each case through bare / gutsrun local / gutsrun HQ, back to back
 bench/timings_summary.py  per-phase medians from gutsrun-timings.jsonl
 examples/               prepared infentory cases (examples/README.md)
-src/gutsrun/            generic: TaskExecutor + backends (no MD imports)
-src/gutsrun_infretis/   infretis adapter + launcher (the only infretis-aware code)
+src/gutsrun/            generic: TaskExecutor + backends; slurm.py chains Slurm jobs (no MD imports)
+src/gutsrun_infretis/   infretis adapter, launcher, chain workload (the only infretis-aware code)
 tests/                  pytest suite (gate C; adapter tests need infretis)
 ```
 
@@ -147,8 +146,20 @@ scripts/setup-venv.sh
 
 The login node (`fs0`) is reachable only from a university network or
 through eduVPN. Code goes there with `scripts/sync.sh <host> push`, and
-`runs/das6/` comes back with `pull`. Chained runs are started on `fs0` with
-`scripts/das6/chain.sh` (usage in its header).
+`runs/das6/` comes back with `pull`.
+
+A run longer than one job's walltime is a chain of Slurm jobs ("links"),
+each continuing from `restart.toml` and submitting the next.
+`gutsrun.slurm` holds the generic part, `gutsrun_infretis.chain` the
+infretis workload and the command; both use only the standard library and
+run with the site's system Python. On `fs0`, from the repo root:
+
+```bash
+PYTHONPATH=src python3.12 -m gutsrun_infretis.chain 2d gutsrun --steps 1000 --time 00:05:00
+PYTHONPATH=src python3.12 -m gutsrun.slurm pack     # repack bin/venv.tar after changing .venv
+```
+
+It prints link 1's job id. Options and outputs: the two modules' docstrings.
 
 ## Status
 
