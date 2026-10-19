@@ -513,49 +513,92 @@ def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
     return submit(spec, plan.site, 1) if submit_first else str(spec.path)
 
 
-def status(spec: Spec) -> tuple[list[str], bool]:
-    """A report on the chain, one line each: the run's progress, then each
-    link. Also whether any of its jobs is still queued or running (True
-    if squeue does not answer)."""
-    try:
-        lines = [f"{spec.name} ({spec.site}): "
-                 f"{spec.make_workload().progress(Path(spec.rundir)).text}"]
-    except StateError as e:
-        lines = [f"{spec.name} ({spec.site}): {e}"]
+@dataclass
+class Report:
+    """The state of a chain, from `status()`."""
+
+    progress: str  # the run's, e.g. "step 526 of 1000"
+    links: list[str]  # one line per link
+    states: list[str]  # per link, its state without times, to spot changes
+    over: str | None  # why the chain is over, if it is
+    active: bool  # a job of the chain is queued or running (or squeue does not answer)
+
+    def lines(self) -> list[str]:
+        return [self.progress, *self.links] + ([f"chain over: {self.over}"] if self.over else [])
+
+
+def why_over(spec: Spec, last: dict[str, Any] | None) -> str:
+    """Why a chain with no job left is over, from the last link's "ended" event."""
     if spec.stop_file.exists():
-        lines[0] += "; stopped by request"
+        return "stopped by request; `submit` again to continue"
+    if last is None:
+        return "no link ran to the end; see the link logs"
+    if last["result"].startswith("done"):
+        return "the run is done"
+    if last["result"] == "stopped at the walltime" and last["link"] >= spec.links:
+        return (f"all {spec.links} links ran; `submit` again to continue")
+    return f"link {last['link']}: {last['result']}; see {spec.dir}/link{last['link']}-{last['job']}.out"
+
+
+def status(spec: Spec) -> Report:
+    """A report on the chain: the run's progress, each link's state, and
+    whether and why the chain is over."""
+    try:
+        progress = (f"{spec.name} ({spec.site}): "
+                    f"{spec.make_workload().progress(Path(spec.rundir)).text}")
+    except StateError as e:
+        progress = f"{spec.name} ({spec.site}): {e}"
     record = events(spec)
     ended = {(e["link"], e["job"]): e for e in record if e["event"] == "ended"}
     started = {(e["link"], e["job"]): e for e in record if e["event"] == "started"}
     queued = queue()
+    links, states = [], []
     if queued is None:
-        lines.append("(squeue does not answer)")
+        links.append("(squeue does not answer)")
+        states.append("no squeue")
     active = queued is None
     for link, job in chain_jobs(spec):
         head = f"link {link:>2}  job {job:<10}"
         if queued and job in queued:
             active = True
-            lines.append(f"{head} {queued[job]}")
+            state, _, rest = queued[job].partition(" ")
+            elapsed, _, reason = rest.partition(" ")
+            links.append(f"{head} {state} {elapsed} {reason}")
+            states.append(f"{link} {state} {reason}")
         elif (link, job) in ended:
             e = ended[(link, job)]
-            lines.append(f"{head} ended {e['time']}: {e['result']}, {e['progress']}")
+            links.append(f"{head} ended {e['time']}: {e['result']}, {e['progress']}")
+            states.append(f"{link} ended")
         elif (link, job) in started:
-            lines.append(f"{head} gone without a word after starting on "
+            links.append(f"{head} gone without a word after starting on "
                          f"{started[(link, job)]['host']}; see {spec.dir}/link{link}-{job}.out")
+            states.append(f"{link} gone")
         elif queued is not None:
-            lines.append(f"{head} cancelled before it started")
-    return lines, active
+            links.append(f"{head} cancelled before it started")
+            states.append(f"{link} cancelled")
+    over = None
+    if not active and record:
+        endings = [e for e in record if e["event"] == "ended"]
+        over = why_over(spec, endings[-1] if endings else None)
+    return Report(progress, links, states, over, active)
 
 
-def follow(spec: Spec, interval: float = 30) -> None:
-    """Print the status whenever it changes, until no job of the chain is left."""
-    last: list[str] = []
+def follow(spec: Spec, interval: float = 30, progress_every: float = 300) -> None:
+    """Print the report when a link's state changes, and otherwise at most
+    every `progress_every` seconds while the run progresses; until no job
+    of the chain is left."""
+    last: Report | None = None
+    printed = 0.0
     while True:
-        lines, active = status(spec)
-        if lines != last:
-            print(f"--- {datetime.now():%H:%M:%S}", *lines, sep="\n", flush=True)
-            last = lines
-        if not active:
+        report = status(spec)
+        changed = last is None or report.states != last.states
+        progressed = (last is not None and report.progress != last.progress
+                      and time.monotonic() - printed >= progress_every)
+        if changed or progressed or not report.active:
+            print(f"--- {datetime.now():%H:%M:%S}", *report.lines(), sep="\n", flush=True)
+            printed = time.monotonic()
+        last = report
+        if not report.active:
             return
         time.sleep(interval)
 

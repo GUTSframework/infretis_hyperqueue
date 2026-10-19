@@ -5,7 +5,7 @@
 #        scripts/wait-jobs.sh [--pull] <host> --run <rundir>
 #
 # Polls <host> over ssh every $INTERVAL s (default 30), printing what it sees
-# whenever that changes:
+# whenever that changes (for --run: a link's state; not the times and steps):
 #
 # - With job ids, or none: `squeue`, for those jobs or all of yours there.
 #   When none is left it prints the jobs' final state (sacct, if the site
@@ -53,7 +53,7 @@ else
 fi
 
 start=$SECONDS
-last="" failures=0
+last="" failures=0 key=""
 while :; do
     rc=0
     out="$(ssh -q -o BatchMode=yes -o ConnectTimeout=15 "$host" "$query")" || rc=$?
@@ -68,19 +68,22 @@ while :; do
             echo "gutsrun-infretis status failed (exit $rc)" >&2
             exit 1
         fi
-        if [ "$out" != "$last" ]; then
-            if [ -n "$rundir" ]; then
+        if [ -n "$rundir" ]; then
+            # The links' states: without the progress line and the jobs' times.
+            new_key="$(tail -n +2 <<<"$out" |
+                sed -E 's/^(link +[0-9]+ +job +[^ ]+ +[A-Z]+) [0-9:-]+/\1/')"
+            if [ "$new_key" != "$key" ] || [ "$rc" = 0 ]; then
                 echo "$(date +%H:%M:%S)"
                 sed 's/^/    /' <<<"$out"
-            elif [ -n "$out" ]; then
+                key="$new_key"
+            fi
+            [ "$rc" = 0 ] && break
+        else
+            if [ "$out" != "$last" ] && [ -n "$out" ]; then
                 echo "$(date +%H:%M:%S)  jobs left:"
                 sed 's/^/    /' <<<"$out"
             fi
             last="$out"
-        fi
-        if [ -n "$rundir" ]; then
-            [ "$rc" = 0 ] && break
-        else
             [ -z "$out" ] && break
         fi
     fi

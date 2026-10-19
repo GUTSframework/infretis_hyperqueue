@@ -18,7 +18,8 @@ import pytest
 
 import gutsrun_infretis.chain as cli
 from gutsrun.slurm import (ChainError, Site, Spec, StateError, events, follow, load_spec,
-                           note, seconds, start, status, stop, venv_stale, walltime)
+                           note, seconds, start, status, stop, venv_stale, walltime,
+                           why_over)
 from gutsrun_infretis.chain import InfretisRun
 from conftest import wait_for
 
@@ -281,21 +282,43 @@ def test_status_reports_progress_and_each_link(project, monkeypatch, capsys):
     proc.communicate(timeout=60)
 
     project.use_fakes(monkeypatch, squeue="1001 PENDING 0:00 (Dependency)")
-    lines, active = status(spec)
-    assert active
-    assert lines[0].startswith("r (test): step ")
-    assert "ended" in lines[1] and "stopped at the walltime" in lines[1]
-    assert lines[2].endswith("PENDING 0:00 (Dependency)") and "job 1001" in lines[2]
+    report = status(spec)
+    assert report.active and report.over is None
+    assert report.progress.startswith("r (test): step ")
+    assert "ended" in report.links[0] and "stopped at the walltime" in report.links[0]
+    assert report.links[1].endswith("PENDING 0:00 (Dependency)")
+    assert "job 1001" in report.links[1]
+    assert report.states == ["1 ended", "2 PENDING (Dependency)"]
+    # The job's time is not part of its state.
+    project.use_fakes(monkeypatch, squeue="1001 PENDING 0:30 (Dependency)")
+    assert status(spec).states == report.states
 
     project.use_fakes(monkeypatch, squeue="")
-    lines, active = status(spec)
-    assert not active and lines[2].endswith("cancelled before it started")
+    report = status(spec)
+    assert not report.active and report.links[1].endswith("cancelled before it started")
+    assert report.over.startswith(f"link 1: stopped at the walltime; see {spec.dir}/link1-")
     follow(spec, interval=0)  # returns: nothing left in the queue
-    assert "cancelled before it started" in capsys.readouterr().out
+    assert "chain over: link 1" in capsys.readouterr().out
 
     project.use_fakes(monkeypatch)
-    lines, active = status(spec)
-    assert active and "(squeue does not answer)" in lines
+    report = status(spec)
+    assert report.active and "(squeue does not answer)" in report.links
+
+
+def test_why_a_chain_is_over(project):
+    spec = project.make_spec(links=2)
+    project.rundir.joinpath(".gutsrun").mkdir()
+
+    def ended(link: int, result: str) -> dict:
+        return {"link": link, "job": "7", "result": result}
+
+    assert why_over(spec, ended(1, "done")) == "the run is done"
+    assert why_over(spec, ended(2, "stopped at the walltime")) == (
+        "all 2 links ran; `submit` again to continue")
+    assert why_over(spec, ended(1, "failed (exit 1)")).startswith("link 1: failed (exit 1)")
+    assert why_over(spec, None).startswith("no link ran to the end")
+    spec.stop_file.touch()
+    assert why_over(spec, ended(1, "stopped by request")).startswith("stopped by request")
 
 
 def test_stop_cancels_queued_links_and_signals_the_running_one(project, monkeypatch):

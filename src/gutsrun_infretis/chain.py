@@ -149,7 +149,8 @@ def main(argv: list[str] | None = None) -> None:
     stat.epilog = ("exit status: 0 once no job of the chain is queued or running, "
                    f"{EXIT_ACTIVE} while some are (or squeue does not answer)")
     stat.add_argument("--follow", action="store_true",
-                      help="print it again on every change, until the chain ends")
+                      help="print it again when a link's state changes, and every 5 minutes "
+                           "while the run progresses, until the chain ends")
     stat.add_argument("--interval", type=float, default=30, help="seconds between checks")
 
     halt = commands.add_parser("stop", help="stop the chain in the run directory")
@@ -170,9 +171,9 @@ def main(argv: list[str] | None = None) -> None:
             if args.follow:
                 follow(spec, args.interval)
             else:
-                lines, active = status(spec)
-                print(*lines, sep="\n")
-                sys.exit(EXIT_ACTIVE if active else 0)
+                report = status(spec)
+                print(*report.lines(), sep="\n")
+                sys.exit(EXIT_ACTIVE if report.active else 0)
         else:
             print(*stop(load_spec(args.rundir)), sep="\n")
     except (ChainError, StateError) as e:

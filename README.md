@@ -53,7 +53,7 @@ cd /path/to/my-run
 ~/infretis_hyperqueue/.venv/bin/gutsrun-infretis submit --site das6 --links 20
 gutsrun-infretis submit --check    # the checks only: shows the sbatch command, submits nothing
 gutsrun-infretis status            # where the run is, and each link's job
-gutsrun-infretis status --follow   # the same, again on every change, until the chain ends
+gutsrun-infretis status --follow   # again when a link changes (progress: every 5 min), until the end
 gutsrun-infretis stop              # stop the chain; restart.toml stays valid
 ```
 
