@@ -60,6 +60,7 @@ CONFIG = {
     "links": (int, "most links, a cap on the whole chain (default: 10)"),
     "margin": (int, "seconds before the walltime that SIGTERM is asked for (default: 90)"),
     "cores_per_task": (int, "cores per infretis move, i.e. per MD engine call (default: 1)"),
+    "nodes": (int, "nodes per link, each with an HQ worker on all its cores (default: 1)"),
 }
 
 
@@ -122,7 +123,7 @@ def make_spec(rundir: Path, options: dict[str, Any], root: str | Path = ROOT) ->
                 workload="gutsrun_infretis.chain:InfretisRun",
                 args={"cores_per_task": config.get("cores_per_task", 1)},
                 margin=config.get("margin", 90), links=config.get("links", 10),
-                root=str(root))
+                nodes=config.get("nodes", 1), root=str(root))
     if "time" in config:
         spec.time = config["time"]
     else:

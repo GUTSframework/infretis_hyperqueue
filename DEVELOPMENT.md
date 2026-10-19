@@ -139,7 +139,9 @@ one that runs `bench/bare_run.py` with either runner. A link's own process
 runs `.venv/bin/python -m gutsrun.slurm link ...` and imports only the
 standard library, so it reads nothing from site-packages on the shared
 file system; the workload's command then runs from the node-local venv
-copy.
+copy. With `nodes` > 1, one srun step runs `python -m gutsrun.slurm worker`
+on each of the other nodes: it unpacks that node's venv copy and starts an
+HQ worker there (`run_worker`).
 
 Bench chains on DAS-6, from the repo root on `fs0`:
 

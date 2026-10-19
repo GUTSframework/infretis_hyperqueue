@@ -3,8 +3,8 @@
 `Counter` is the workload; run as a script it is the command a link runs:
 it counts `step` in <rundir>/state.json up to `steps`, one per `delay`
 seconds, exits 3 on SIGTERM and 1 at `fail_at`. Under HQ it records what
-it saw of the server in hq.json. With `crash`, `argv()` raises, as a
-workload with a bug would.
+it saw of the server in hq.json, after waiting for `workers` HQ workers
+to join. With `crash`, `argv()` raises, as a workload with a bug would.
 """
 
 import argparse
@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ class Counter:
     fail_at: int | None = None
     needs_hq: bool = False
     crash: bool = False
+    workers: int = 1
 
     def progress(self, rundir: Path) -> Progress:
         path = rundir / "state.json"
@@ -48,7 +50,21 @@ class Counter:
                 "--delay", str(self.delay)]
         if self.fail_at is not None:
             argv += ["--fail-at", str(self.fail_at)]
+        if self.needs_hq:
+            argv += ["--workers", str(self.workers)]
         return argv
+
+
+def hq_workers(expected: int, timeout: float = 30) -> int:
+    """How many HQ workers have joined, once `expected` have (or at the timeout)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        out = subprocess.run(["hq", "worker", "list", "--output-mode", "json"],
+                             capture_output=True, text=True).stdout
+        count = len(json.loads(out or "[]"))
+        if count >= expected or time.monotonic() > deadline:
+            return count
+        time.sleep(0.2)
 
 
 def main() -> None:
@@ -57,6 +73,7 @@ def main() -> None:
     p.add_argument("--steps", type=int)
     p.add_argument("--delay", type=float)
     p.add_argument("--fail-at", type=int)
+    p.add_argument("--workers", type=int, default=1)
     args = p.parse_args()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(3))
     state = args.rundir / "state.json"
@@ -64,8 +81,10 @@ def main() -> None:
     (args.rundir / "python.txt").write_text(sys.executable)
     (args.rundir / "cwd.txt").write_text(os.getcwd())
     if "HQ_SERVER_DIR" in os.environ:
+        workers = hq_workers(args.workers)
         (args.rundir / "hq.json").write_text(json.dumps({
-            "listed": os.listdir(os.environ["HQ_SERVER_DIR"]), "hq": shutil.which("hq")}))
+            "listed": os.listdir(os.environ["HQ_SERVER_DIR"]), "hq": shutil.which("hq"),
+            "workers": workers}))
     while step < args.steps:
         time.sleep(args.delay)
         step += 1

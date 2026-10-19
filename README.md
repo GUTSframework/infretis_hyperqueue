@@ -79,10 +79,13 @@ links = 20             # a cap on the whole chain (default 10)
 time = "00:14:00"      # walltime per link (default: just under the site's daytime limit)
 margin = 90            # seconds before the walltime that SIGTERM comes (default 90)
 cores_per_task = 1     # cores per infretis move, i.e. per MD engine call (default 1)
+nodes = 1              # nodes per link, each with an HQ worker on all its cores (default 1)
 name = "water-run-3"   # label in the Slurm job names (default: the directory's name)
 ```
 
 The simulation itself (steps, workers, engines) stays in `infretis.toml`.
+More nodes only help if infretis has more `workers` than one node's cores
+hold (`workers` × `cores_per_task` > the site's `cores_per_node`).
 To label a run beyond `name`, use version control: a commit message or a
 README in the run directory.
 
@@ -95,8 +98,10 @@ infretis's own outputs, as without gutsrun, plus:
 - `.gutsrun/links.jsonl`: one line per event (submitted, started, ended,
   with the result and the step reached). `status` reads it.
 - `.gutsrun/chain.json`: the chain's settings.
+- `.gutsrun/link<n>-<job>-hq-server.log`, `-hq-worker.log` and, with
+  `nodes` > 1, `-hq-worker-<host>.log` for each other node: HQ's own logs.
 - `gutsrun.log`, `gutsrun-timings.jsonl`: the launcher's log and per-move
-  timings.
+  timings (with the host each move ran on).
 - `restart.toml.bak.<step>`: a copy of `restart.toml` at each link's start.
 
 infretis writes its data to `infretis_data.txt`, unless that file exists

@@ -38,6 +38,7 @@ local_venv = false
 
 # Node-local disk that jobs may write to, for local_venv. Default: none.
 # Common: /local, /tmp, /scratch-local. It must exist under the same path on
-# every node. Copies left by jobs that are gone are removed by the next job
-# on that node.
+# every node: with nodes > 1, each node of a job unpacks its own copy there,
+# and moves run with the copy's Python by that path. Copies left by jobs
+# that are gone are removed by the next job on that node.
 # local_disk = "/local"

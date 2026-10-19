@@ -12,6 +12,8 @@ A link runs this module with the project venv's Python:
     .venv/bin/python -m gutsrun.slurm link <rundir>/.gutsrun/chain.json <n>
     .venv/bin/python -m gutsrun.slurm pack     (bin/venv.tar from .venv)
 
+and, through srun on a link's other nodes, `... worker <spec> <n> <server dir>`.
+
 Standard library only, so that a link's own process imports nothing from
 site-packages on the shared file system.
 
@@ -33,6 +35,10 @@ Each link:
 5. If the workload needs HQ: starts an HQ server and one worker inside the
    job, in a fresh server directory on the shared file system, without a
    journal. The workload's own state is what a restart continues from.
+   With `nodes` > 1, starts one HQ worker on each of the job's other nodes
+   too, in one srun step (`worker` below): each unpacks its own venv copy
+   first if the site uses one, at the same path as on the first node, since
+   tasks run with the workload's interpreter.
 6. Runs the workload's command in the run directory, passing SIGTERM and
    SIGINT on. Slurm sends SIGTERM `margin` seconds before the walltime
    (`--signal=B:TERM@margin`), and may send it up to 60 s earlier than asked.
@@ -70,7 +76,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from types import FrameType
-from typing import Any, Protocol
+from typing import IO, Any, Protocol
 
 EXIT_STOPPED = 3
 HQ_VERSION = "0.26.2"  # keep in sync with flake.nix and scripts/get-hq.sh
@@ -134,6 +140,7 @@ class Spec:
     time: str = "00:14:00"  # walltime per link, in Slurm's format
     margin: int = 90  # seconds before the walltime that SIGTERM is asked for
     links: int = 10  # most links in the chain
+    nodes: int = 1  # per link; nodes after the first only run HQ workers
     root: str = str(ROOT)  # project checkout: sites/, .venv, bin/
 
     @property
@@ -403,11 +410,9 @@ def wait_listed(directory: Path, name: str, timeout: float) -> bool:
     return False
 
 
-@contextlib.contextmanager
-def hq_server(root: str | Path, server: Path, log_prefix: str, cores: int) -> Iterator[str]:
-    """Run an HQ server and one worker on this node for the `with` block;
-    yields the directory of the hq binary. Stops both and removes the
-    server directory when the block ends, also on errors."""
+def hq_binary(root: str | Path) -> str:
+    """The hq binary: bin/hq in the checkout, else the one on PATH, checked
+    to be HQ_VERSION."""
     bundled = Path(root) / "bin" / "hq"
     hq = str(bundled) if bundled.exists() else shutil.which("hq")
     if hq is None:
@@ -415,6 +420,15 @@ def hq_server(root: str | Path, server: Path, log_prefix: str, cores: int) -> It
     version = subprocess.run([hq, "--version"], capture_output=True, text=True).stdout.strip()
     if not version.endswith(f"v{HQ_VERSION}"):
         raise ChainError(f"need hq {HQ_VERSION}, have: {version}")
+    return hq
+
+
+@contextlib.contextmanager
+def hq_server(root: str | Path, server: Path, log_prefix: str, cores: int) -> Iterator[str]:
+    """Run an HQ server and one worker on this node for the `with` block;
+    yields the directory of the hq binary. Stops both and removes the
+    server directory when the block ends, also on errors."""
+    hq = hq_binary(root)
     shutil.rmtree(server, ignore_errors=True)
     # Created here, so that the wait below lists an existing directory.
     server.mkdir(parents=True)
@@ -444,6 +458,33 @@ def hq_server(root: str | Path, server: Path, log_prefix: str, cores: int) -> It
         shutil.rmtree(server, ignore_errors=True)
 
 
+@contextlib.contextmanager
+def hq_workers_elsewhere(spec: Spec, link: int, server: Path, cores: int) -> Iterator[None]:
+    """One HQ worker on each of the job's other nodes for the `with` block:
+    one srun step that runs `worker` there (see `run_worker`). Stops them
+    when the block ends: srun passes SIGTERM on to each node's `worker`."""
+    others = spec.nodes - 1
+    python = str(Path(spec.root) / ".venv" / "bin" / "python")
+    # --relative=1: the nodes after the first, which runs this link.
+    # --cpus-per-task: a step gets one CPU per task unless told otherwise,
+    # and the worker and its tasks would be confined to it.
+    argv = ["srun", f"--nodes={others}", f"--ntasks={others}", "--ntasks-per-node=1",
+            "--relative=1", f"--cpus-per-task={cores}", "--kill-on-bad-exit=0",
+            python, "-m", "gutsrun.slurm", "worker", str(spec.path), str(link), str(server)]
+    log.info(f"hq workers on {others} more node(s): {shlex.join(argv)}")
+    step = subprocess.Popen(argv)
+    try:
+        yield
+    finally:
+        step.send_signal(signal.SIGTERM)
+        try:
+            step.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            step.kill()
+            step.wait()
+        log.info(f"hq workers on the other nodes: srun exit {step.returncode}")
+
+
 # --- submitting, status, stopping ------------------------------------------------------
 
 
@@ -454,7 +495,7 @@ def sbatch_argv(spec: Spec, site: Site, link: int, after: str | None = None) -> 
     command = (f"exec {shlex.quote(str(python))} -m gutsrun.slurm link "
                f"{shlex.quote(str(spec.path))} {link}")
     argv = ["sbatch", "--parsable", f"--job-name=gutsrun-{spec.name}-{link}",
-            f"--partition={site.partition}", "--nodes=1", f"--time={spec.time}",
+            f"--partition={site.partition}", f"--nodes={spec.nodes}", f"--time={spec.time}",
             f"--signal=B:TERM@{spec.margin}", f"--chdir={spec.rundir}",
             f"--output={spec.dir / f'link{link}-%j.out'}"]
     if site.exclusive:
@@ -507,6 +548,11 @@ def check(spec: Spec, night: bool = False, submitting: bool = True) -> Plan:
     if not (root / ".venv" / "bin" / "python").exists():
         raise ChainError(f"no .venv in {root}; run scripts/setup-venv.sh first")
     workload = spec.make_workload()
+    if spec.nodes < 1:
+        raise ChainError(f"nodes = {spec.nodes}; need at least 1")
+    if spec.nodes > 1 and not workload.needs_hq:
+        raise ChainError(f"nodes = {spec.nodes}, but the workload does not run its tasks "
+                         "through HQ, so it would use only the first node")
     progress = workload.progress(Path(spec.rundir))
     if progress.done:
         raise ChainError(f"the run in {spec.rundir} is done: {progress.text}")
@@ -694,7 +740,8 @@ class Forwarder:
     """Passes SIGTERM and SIGINT on to the workload once it runs; one that
     arrives earlier keeps the workload from starting."""
 
-    def __init__(self) -> None:
+    def __init__(self, what: str = "the workload") -> None:
+        self.what = what  # for the log
         self.child: subprocess.Popen[bytes] | None = None
         self.received: str | None = None
         self.forwarded = False
@@ -703,17 +750,19 @@ class Forwarder:
 
     def handle(self, signum: int, _frame: FrameType | None) -> None:
         self.received = signal.Signals(signum).name
-        log.info(f"{self.received}: stopping the workload")
+        log.info(f"{self.received}: stopping {self.what}")
         if self.child is not None:
             self.forwarded = True
             self.child.send_signal(signum)
 
     def start(self, argv: list[str], cwd: Path | None = None,
-              env: dict[str, str] | None = None) -> subprocess.Popen[bytes]:
+              env: dict[str, str] | None = None,
+              stdout: IO[bytes] | None = None) -> subprocess.Popen[bytes]:
         """Start the workload. A signal that arrives while it starts, after
         `received` was last checked but before `child` is set, is passed
         on here; only once: one request, one signal."""
-        child = self.child = subprocess.Popen(argv, cwd=cwd, env=env)
+        child = self.child = subprocess.Popen(argv, cwd=cwd, env=env, stdout=stdout,
+                                              stderr=subprocess.STDOUT if stdout else None)
         if self.received is not None and not self.forwarded:
             self.forwarded = True
             child.send_signal(signal.Signals[self.received])
@@ -791,6 +840,9 @@ def run_link(spec_path: str | Path, link: int) -> int:
                                                            site.cores))
                     env["HQ_SERVER_DIR"] = str(server)
                     env["PATH"] = os.pathsep.join([hq_dir, env.get("PATH", "")])
+                    if spec.nodes > 1:
+                        stack.enter_context(hq_workers_elsewhere(spec, link, server,
+                                                                 site.cores))
                 argv = workload.argv(python, rundir, link)
                 if forwarder.received:
                     log.info("not starting the workload")
@@ -833,18 +885,58 @@ def run_link(spec_path: str | Path, link: int) -> int:
         return end(1, f"crashed: {type(e).__name__}: {e}", "")
 
 
+def run_worker(spec_path: str | Path, link: int, server: Path) -> int:
+    """On one of a link's other nodes (in its srun step): unpack the venv
+    copy if the site uses one, at the same path as on the link's first node,
+    since tasks run with the workload's interpreter; wait for the HQ server;
+    run an HQ worker on all cores until SIGTERM. Removes the copy at the end."""
+    host = socket.gethostname()
+    forwarder = Forwarder(f"the hq worker on {host}")
+    spec = Spec.load(spec_path)
+    site = Site(spec.root, spec.site)
+    job = os.environ.get("SLURM_JOB_ID", f"nojob-{os.getpid()}")
+    try:
+        hq = hq_binary(spec.root)
+        with contextlib.ExitStack() as stack:
+            if site.local_venv:
+                assert site.local_disk  # Site checks it
+                stack.enter_context(local_venv(spec.root, site.local_disk, job))
+            if not wait_listed(server, "hq-current", 60):
+                log.info(f"{host}: no hq server in {server}; no worker here")
+                return 1
+            if forwarder.received:
+                return 0
+            with open(spec.dir / f"link{link}-{job}-hq-worker-{host}.log", "wb") as out:
+                child = forwarder.start([hq, "worker", "start", "--server-dir", str(server),
+                                         "--cpus", str(site.cores)], stdout=out)
+            log.info(f"{host}: hq worker started")
+            code = child.wait()
+            log.info(f"{host}: hq worker exit {code}")
+    except ChainError as e:
+        log.info(f"{host}: {e}")
+        return 1
+    return 0 if forwarder.received else code
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     link = commands.add_parser("link", help="run one link (inside its Slurm job)")
     link.add_argument("spec", type=Path)
     link.add_argument("link", type=int)
+    worker = commands.add_parser("worker", help="run an HQ worker on one of a link's "
+                                                "other nodes (through srun, from `link`)")
+    worker.add_argument("spec", type=Path)
+    worker.add_argument("link", type=int)
+    worker.add_argument("server", type=Path)
     pack = commands.add_parser("pack", help="pack .venv into bin/venv.tar")
     pack.add_argument("--root", type=Path, default=ROOT)
     args = parser.parse_args(argv)
     setup_logging()
     if args.command == "link":
         return run_link(args.spec, args.link)
+    if args.command == "worker":
+        return run_worker(args.spec, args.link, args.server)
     pack_venv(args.root)
     print(args.root / "bin" / "venv.tar")
     return 0

@@ -3,6 +3,7 @@ comparison on a cluster. Run it on the login node, from the project root:
 
     .venv/bin/python bench/chain.py 2d gutsrun --steps 1000 --time 00:05:00
     .venv/bin/python bench/chain.py 2d bare --steps 3000 --time 00:04:00
+    .venv/bin/python bench/chain.py 2d gutsrun --nodes 2 --cores-per-task 8 ...
 
 case: 2d (examples/2d_potential) or lammps (examples/water_dissociation_lammps;
 needs an `lmp` on the nodes). runner: bare (infretis's own
@@ -62,6 +63,11 @@ def main() -> None:
     p.add_argument("--margin", type=int, default=90,
                    help="seconds before the walltime that SIGTERM is asked for")
     p.add_argument("--links", type=int, default=3, help="most links (3: DAS-6 daytime)")
+    p.add_argument("--nodes", type=int, default=1,
+                   help="nodes per link, each with an HQ worker (gutsrun runner only)")
+    p.add_argument("--cores-per-task", type=int, default=1,
+                   help="cores HQ reserves per move (gutsrun runner): with more than "
+                        "1, fewer moves fit on one node and the rest go to the others")
     p.add_argument("--name", help="run name (default: <date>-<case>-<runner>)")
     p.add_argument("--site", default="das6")
     p.add_argument("--night", action="store_true",
@@ -79,8 +85,9 @@ def main() -> None:
     example = str(ROOT / CASES[args.case])
     spec = Spec(rundir=str(rundir), site=args.site, name=name,
                 workload="chain:BenchRun", pythonpath=[str(BENCH)],
-                args={"example": example, "runner": args.runner},
-                time=args.time, margin=args.margin, links=args.links)
+                args={"example": example, "runner": args.runner,
+                      "cores_per_task": args.cores_per_task},
+                time=args.time, margin=args.margin, links=args.links, nodes=args.nodes)
     try:
         check_time(spec, Site(ROOT, args.site), args.night)  # before preparing the run
         rundir.parent.mkdir(parents=True, exist_ok=True)

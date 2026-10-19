@@ -31,6 +31,7 @@ from gutsrun.slurm import (
     load_spec,
     note,
     revision,
+    sbatch_argv,
     seconds,
     start,
     status,
@@ -68,6 +69,15 @@ FAKE_SQUEUE = """\
 [ -n "${FAKE_SQUEUE+x}" ] || exit 1
 printf '%s\\n' "$FAKE_SQUEUE"
 """
+# Runs the step's command here, once, as if on one other node: with its own
+# node-local disk ($FAKE_NODE_DISK), as each node has.
+FAKE_SRUN = """\
+#!/usr/bin/env bash
+echo "srun $*" >> "$FAKE_LOG"
+while [ "${1#-}" != "$1" ]; do shift; done
+[ -n "${FAKE_NODE_DISK:-}" ] && export GUTSRUN_LOCAL_DISK="$FAKE_NODE_DISK"
+exec "$@"
+"""
 FAKE_HQ = '#!/usr/bin/env bash\necho "hyperqueue v0.26.2"\n'
 
 
@@ -87,7 +97,7 @@ class Project:
         self.fakebin = root / "fakebin"
         self.fakebin.mkdir()
         for name, text in [("sbatch", FAKE_SBATCH), ("scancel", FAKE_SCANCEL),
-                           ("squeue", FAKE_SQUEUE)]:
+                           ("squeue", FAKE_SQUEUE), ("srun", FAKE_SRUN)]:
             (self.fakebin / name).write_text(text)
             (self.fakebin / name).chmod(0o755)
         self.log = root / "fake.log"
@@ -108,13 +118,14 @@ class Project:
         else:
             monkeypatch.setenv("FAKE_SQUEUE", squeue)
 
-    def make_spec(self, links: int = 2, **counter) -> Spec:
+    def make_spec(self, links: int = 2, nodes: int = 1, **counter) -> Spec:
         return Spec(rundir=str(self.rundir), site="test", name="r",
                     workload="chain_workload:Counter", pythonpath=[str(REPO / "tests")],
-                    args=counter, time="00:05:00", links=links, root=str(self.root))
+                    args=counter, time="00:05:00", links=links, nodes=nodes,
+                    root=str(self.root))
 
-    def spec(self, links: int = 2, **counter) -> Spec:
-        spec = self.make_spec(links, **counter)
+    def spec(self, links: int = 2, nodes: int = 1, **counter) -> Spec:
+        spec = self.make_spec(links, nodes, **counter)
         start(spec, submit_first=False)
         return spec
 
@@ -192,6 +203,7 @@ def test_start_submits_link_1_with_site_options(project, monkeypatch):
         assert part in call
     assert "--dependency" not in call
     assert load_spec(project.rundir) == spec
+    assert "--nodes=2" in sbatch_argv(project.make_spec(nodes=2), Site(project.root, "test"), 1)
     assert [e["event"] for e in events(spec)] == ["chain", "submitted"]
 
 
@@ -211,6 +223,10 @@ def test_start_refusals(project):
     (project.rundir / "state.json").write_text("{")
     with pytest.raises(StateError, match="does not parse"):
         start(project.make_spec(), submit_first=False)
+    with pytest.raises(ChainError, match="nodes = 0; need at least 1"):
+        start(spec(nodes=0), submit_first=False)
+    with pytest.raises(ChainError, match="does not run its tasks through HQ"):
+        start(spec(nodes=2), submit_first=False)
     (project.rundir / "state.json").unlink()
     start(spec(time="00:15:00"), night=True, submit_first=False)
 
@@ -518,6 +534,27 @@ def test_hq_server_and_worker_in_the_link(project):
     assert list(spec.dir.glob("link1-*-hq-worker.log"))
 
 
+@pytest.mark.hq
+def test_hq_workers_on_the_other_nodes(tmp_path):
+    if shutil.which("hq") is None:
+        pytest.skip("no hq binary (run inside `nix develop`)")
+    project = Project(tmp_path, local_venv=True)
+    node_disk = tmp_path / "node1-local"
+    node_disk.mkdir()
+    spec = project.spec(nodes=2, needs_hq=True, workers=2)
+    rc, out = project.link(spec, 1, SLURM_JOB_ID="4242", FAKE_NODE_DISK=str(node_disk))
+    assert rc == 0, out
+    assert json.loads((project.rundir / "hq.json").read_text())["workers"] == 2
+    [srun] = project.calls("srun")
+    for part in ["--nodes=1", "--ntasks=1", "--ntasks-per-node=1", "--relative=1",
+                 "--cpus-per-task=2", f"-m gutsrun.slurm worker {spec.path} 1 "]:
+        assert part in srun
+    assert "hq worker started" in out and "hq worker exit" in out
+    assert list(spec.dir.glob("link1-4242-hq-worker-*.log"))
+    assert "venv unpacked to " + str(node_disk) in out  # the other node's own copy
+    assert list(node_disk.iterdir()) == []  # and removed at the end
+
+
 # --- the infretis workload and gutsrun-infretis --------------------------------------
 
 
@@ -551,9 +588,11 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
     (rundir / "gutsrun.toml").write_text('site = "test"\nlinks = 7\nwalltime = "1"\n')
     with pytest.raises(ChainError, match="unknown key 'walltime'"):
         cli.make_spec(rundir, {}, root=project.root)
-    (rundir / "gutsrun.toml").write_text('site = "test"\nlinks = 7\ncores_per_task = 2\n')
+    (rundir / "gutsrun.toml").write_text(
+        'site = "test"\nlinks = 7\ncores_per_task = 2\nnodes = 3\n')
     spec = cli.make_spec(rundir, {"links": 5, "name": None}, root=project.root)
     assert (spec.links, spec.name, spec.time) == (5, "run", "0:14:00")  # just under 15 min
+    assert spec.nodes == 3
     assert spec.args == {"cores_per_task": 2}
     assert spec.workload == "gutsrun_infretis.chain:InfretisRun"
 
