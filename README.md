@@ -160,7 +160,7 @@ through eduVPN. Code goes there with `scripts/sync.sh <host> push`, and
 | 4 | infretis adapter + launcher | done on the laptop; exact check passes (LAMMPS) |
 | 5 | HQ backend, local (gate A, D1) | done on the laptop; gate A passed; D1 numbers in the vault |
 | 6 | DAS-6 preflight | done, except the MD engines (they come the researchers' way) |
-| 7 | DAS-6, one node (gate B) | |
+| 7 | DAS-6, one node (gate B) | gate B partial: 2d_potential chains with both runners; the real MD case waits on the engines |
 | 8 | DAS-6, multi-node + drills | |
 | 9 | Validation + metrics | |
 | 10 | Snellius port (gate D) | |
