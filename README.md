@@ -151,7 +151,7 @@ scripts/setup-venv.sh
 | 3 | `gutsrun` + test suite (gate C) | done on the laptop; gate C passed (24/24) |
 | 4 | infretis adapter + launcher | done on the laptop; exact check passes (LAMMPS) |
 | 5 | HQ backend, local (gate A, D1) | done on the laptop; gate A passed; D1 numbers in the vault |
-| 6 | DAS-6 preflight | |
+| 6 | DAS-6 preflight | done, except the MD engines (they come the researchers' way) |
 | 7 | DAS-6, one node (gate B) | |
 | 8 | DAS-6, multi-node + drills | |
 | 9 | Validation + metrics | |
