@@ -99,6 +99,13 @@ infretis's own outputs, as without gutsrun, plus:
   timings.
 - `restart.toml.bak.<step>`: a copy of `restart.toml` at each link's start.
 
+infretis writes its data to `infretis_data.txt`, unless that file exists
+when a run starts fresh: then to `infretis_data_1.txt` (`_2`, ...), and
+`restart.toml`'s `output.data_file` names the file in use. So if link 1
+stops before infretis completes its first move (an early `stop`, a crash, a
+walltime too short for one move), `infretis_data.txt` keeps only its
+header, and the run's data go to `infretis_data_1.txt`.
+
 ## Running longer, starting again
 
 The run is done when `restart.toml`'s `current.cstep` reaches
