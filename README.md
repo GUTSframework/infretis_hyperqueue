@@ -143,6 +143,13 @@ scripts/setup-venv.sh
 .venv/bin/python -c 'import infretis, hyperqueue'
 ```
 
+## DAS-6
+
+The login node (`fs0`) is reachable only from a university network or
+through eduVPN. Code goes there with `scripts/sync.sh <host> push`, and
+`runs/das6/` comes back with `pull`. Chained runs are started on `fs0` with
+`scripts/das6/chain.sh` (usage in its header).
+
 ## Status
 
 | Step | | State |
