@@ -66,7 +66,8 @@ def main() -> None:
     p.add_argument("--night", action="store_true",
                    help="allow a walltime beyond the site's daytime limit")
     p.add_argument("--no-submit", action="store_true",
-                   help="write the spec only and print its path")
+                   help="prepare the run and its chain, submit nothing, print the spec's "
+                        "path: run links by hand with `python -m gutsrun.slurm link`")
     args = p.parse_args()
     setup_logging()
 

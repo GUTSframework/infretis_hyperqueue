@@ -51,13 +51,17 @@ share:
 ```bash
 cd /path/to/my-run
 ~/infretis_hyperqueue/.venv/bin/gutsrun-infretis submit --site das6 --links 20
+gutsrun-infretis submit --check    # the checks only: shows the sbatch command, submits nothing
 gutsrun-infretis status            # where the run is, and each link's job
 gutsrun-infretis status --follow   # the same, again on every change, until the chain ends
 gutsrun-infretis stop              # stop the chain; restart.toml stays valid
 ```
 
 (The examples call it by its path once; with `.venv/bin` on your `PATH`,
-`gutsrun-infretis` is enough.)
+`gutsrun-infretis` is enough.) `status` exits with 0 once none of the
+chain's jobs is queued or running, and 10 while some are, for scripts.
+From another machine, `scripts/wait-jobs.sh <host> --run <rundir>` waits
+over ssh until the chain is over.
 
 ## Settings
 

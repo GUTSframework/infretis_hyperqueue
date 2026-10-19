@@ -149,6 +149,12 @@ Bench chains on DAS-6, from the repo root on `fs0`:
 .venv/bin/gutsrun-infretis status runs/das6/<name>
 ```
 
+To run a link without Slurm, e.g. on the laptop, `bench/chain.py
+--no-submit` prepares the run and its chain and prints the spec's path;
+then `GUTSRUN_LOCAL_DISK=<dir> GUTSRUN_CORES=4 .venv/bin/python -m
+gutsrun.slurm link <spec> 1` runs link 1 here (inside `nix develop` for hq).
+The tests do the same through `start(spec, submit_first=False)`.
+
 ## Tests
 
 ```bash
@@ -174,8 +180,8 @@ scripts/setup-venv.sh
 The login node (`fs0`) is reachable only from a university network or
 through eduVPN. Code goes there with `scripts/sync.sh <host> push` (which
 writes `REVISION`, since `.git` is not copied), and `runs/das6/` comes back
-with `pull`. `scripts/wait-jobs.sh <host> <jobid>` waits on the laptop until
-jobs are done.
+with `pull`. `scripts/wait-jobs.sh <host> <jobid>` (or `--run <rundir>` for a
+chain) waits on the laptop until jobs are done.
 
 ## Status
 

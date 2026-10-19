@@ -398,25 +398,43 @@ def test_infretis_progress_and_argv(tmp_path):
         run.progress(tmp_path)
 
 
-def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch):
+def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, capsys):
     (project.fakebin / "hq").write_text(FAKE_HQ)
     (project.fakebin / "hq").chmod(0o755)
     project.use_fakes(monkeypatch)
     rundir = project.rundir
     with pytest.raises(ChainError, match="no infretis.toml"):
-        cli.submit(rundir, {}, root=project.root)
+        cli.make_spec(rundir, {}, root=project.root)
     (rundir / "infretis.toml").write_text("")
     with pytest.raises(ChainError, match="no site"):
-        cli.submit(rundir, {}, root=project.root)
+        cli.make_spec(rundir, {}, root=project.root)
     (rundir / "gutsrun.toml").write_text('site = "test"\nlinks = 7\nwalltime = "1"\n')
     with pytest.raises(ChainError, match="unknown key 'walltime'"):
-        cli.submit(rundir, {}, root=project.root)
+        cli.make_spec(rundir, {}, root=project.root)
     (rundir / "gutsrun.toml").write_text('site = "test"\nlinks = 7\ncores_per_task = 2\n')
-    cli.submit(rundir, {"links": 5, "name": None}, submit_first=False, root=project.root)
-    spec = load_spec(rundir)
+    spec = cli.make_spec(rundir, {"links": 5, "name": None}, root=project.root)
     assert (spec.links, spec.name, spec.time) == (5, "run", "0:14:00")  # just under 15 min
     assert spec.args == {"cores_per_task": 2}
     assert spec.workload == "gutsrun_infretis.chain:InfretisRun"
+
+    lines = cli.describe(spec, night=False)
+    assert lines[0] == "checks passed: run on test, not started (no restart.toml)"
+    assert lines[-1].startswith("would submit link 1 of 5: sbatch --parsable")
+    assert not spec.dir.exists() and project.calls("sbatch") == []  # nothing written
+
+
+def test_status_exit_code_says_whether_the_chain_is_active(project, monkeypatch, capsys):
+    spec = project.make_spec()
+    project.use_fakes(monkeypatch, squeue="1001 PENDING 0:00 (None)")
+    start(spec)
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["status", str(project.rundir)])
+    assert stopped.value.code == cli.EXIT_ACTIVE
+    project.use_fakes(monkeypatch, squeue="")
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["status", str(project.rundir)])
+    assert stopped.value.code == 0
+    assert "cancelled before it started" in capsys.readouterr().out
 
 
 def test_bench_workload_imports_from_bench(project):

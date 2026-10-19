@@ -4,6 +4,7 @@ From a cluster's login node:
 
     cd <run directory>          # infretis.toml, load/, the engine's inputs
     gutsrun-infretis submit --site das6 --time 00:14:00 --links 20
+    gutsrun-infretis submit --check     # the checks and the sbatch command only
     gutsrun-infretis status [--follow]
     gutsrun-infretis stop
 
@@ -21,14 +22,18 @@ including each link's log, go to .gutsrun/ there.
 # Standard library only: a link imports this module to read the run's state.
 
 import argparse
+import shlex
 import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from gutsrun.slurm import (ROOT, ChainError, Progress, Site, Spec, StateError, follow,
-                           load_spec, seconds, setup_logging, start, status, stop, walltime)
+from gutsrun.slurm import (ROOT, ChainError, Progress, Site, Spec, StateError, check, follow,
+                           load_spec, sbatch_argv, seconds, setup_logging, start, status,
+                           stop, walltime)
+
+EXIT_ACTIVE = 10  # `status`: some job of the chain is still queued or running
 
 # gutsrun.toml's keys, their types and what they mean (for --help).
 CONFIG = {
@@ -87,11 +92,9 @@ def read_config(rundir: Path) -> dict[str, Any]:
     return config
 
 
-def submit(rundir: Path, options: dict[str, Any], night: bool = False,
-           submit_first: bool = True, root: str | Path = ROOT) -> str:
-    """Start a chain in `rundir` with gutsrun.toml's settings, overridden by
-    `options` (those not None); returns the first job's id (or the spec's
-    path, if not `submit_first`). `root`: the gutsrun checkout."""
+def make_spec(rundir: Path, options: dict[str, Any], root: str | Path = ROOT) -> Spec:
+    """The chain for `rundir`, from gutsrun.toml's settings overridden by
+    `options` (those not None). `root`: the gutsrun checkout."""
     rundir = rundir.resolve()
     if not (rundir / "infretis.toml").exists():
         raise ChainError(f"no infretis.toml in {rundir}")
@@ -111,7 +114,18 @@ def submit(rundir: Path, options: dict[str, Any], night: bool = False,
         if limit is None:
             raise ChainError("no time: set `time` in gutsrun.toml or pass --time")
         spec.time = walltime(seconds(limit) - 60)
-    return start(spec, night=night, submit_first=submit_first)
+    return spec
+
+
+def describe(spec: Spec, night: bool) -> list[str]:
+    """What `submit` would do, after the checks; writes nothing."""
+    plan = check(spec, night)
+    lines = [f"checks passed: {spec.name} on {spec.site}, {plan.progress.text}"]
+    if plan.pack:
+        lines.append("would pack .venv into bin/venv.tar")
+    lines.append(f"would submit link 1 of {spec.links}: "
+                 f"{shlex.join(sbatch_argv(spec, plan.site, 1))}")
+    return lines
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -127,11 +141,13 @@ def main(argv: list[str] | None = None) -> None:
         sub.add_argument(f"--{key.replace('_', '-')}", dest=key, type=kind, help=text)
     sub.add_argument("--night", action="store_true",
                      help="allow a walltime beyond the site's max_walltime_day")
-    sub.add_argument("--no-submit", action="store_true",
-                     help="write the spec only and print its path")
+    sub.add_argument("--check", action="store_true",
+                     help="run the checks and show the sbatch command; submit nothing")
 
     stat = commands.add_parser("status", help="report on the chain in the run directory")
     stat.add_argument("rundir", nargs="?", type=Path, default=Path.cwd())
+    stat.epilog = ("exit status: 0 once no job of the chain is queued or running, "
+                   f"{EXIT_ACTIVE} while some are (or squeue does not answer)")
     stat.add_argument("--follow", action="store_true",
                       help="print it again on every change, until the chain ends")
     stat.add_argument("--interval", type=float, default=30, help="seconds between checks")
@@ -143,18 +159,20 @@ def main(argv: list[str] | None = None) -> None:
     setup_logging()
     try:
         if args.command == "submit":
-            options = {key: getattr(args, key) for key in CONFIG}
-            result = submit(args.rundir, options, args.night, not args.no_submit)
-            if args.no_submit:
-                print(result)
+            spec = make_spec(args.rundir, {key: getattr(args, key) for key in CONFIG})
+            if args.check:
+                print(*describe(spec, args.night), sep="\n")
             else:
-                print(f"link 1: job {result}; follow it with `gutsrun-infretis status --follow`")
+                job = start(spec, night=args.night)
+                print(f"link 1: job {job}; follow it with `gutsrun-infretis status --follow`")
         elif args.command == "status":
             spec = load_spec(args.rundir)
             if args.follow:
                 follow(spec, args.interval)
             else:
-                print(*status(spec)[0], sep="\n")
+                lines, active = status(spec)
+                print(*lines, sep="\n")
+                sys.exit(EXIT_ACTIVE if active else 0)
         else:
             print(*stop(load_spec(args.rundir)), sep="\n")
     except (ChainError, StateError) as e:

@@ -453,12 +453,21 @@ def submit(spec: Spec, site: Site, link: int, after: str | None = None) -> str:
     return job
 
 
-def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
-    """Check and save a new chain in an existing run directory and submit
-    its first link; returns the job id. With `submit_first=False`, returns
-    the spec's path instead, to run `python -m gutsrun.slurm link <spec> 1`
-    by hand. A run directory can take a new chain once the last one has
-    no jobs left in the queue."""
+@dataclass
+class Plan:
+    """What `check()` found: everything `start()` needs to go ahead."""
+
+    site: Site
+    progress: Progress  # the run's, before the chain
+    revision: str  # of the gutsrun checkout
+    pack: bool  # bin/venv.tar must be packed first
+
+
+def check(spec: Spec, night: bool = False) -> Plan:
+    """Everything `start()` checks, without writing anything. Raises
+    ChainError, or StateError if the run's state is unreadable. A run
+    directory can take a new chain once the last one has no jobs left in
+    the queue."""
     root = Path(spec.root)
     site = Site(root, spec.site)
     check_time(spec, site, night)
@@ -475,7 +484,7 @@ def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
     if not (root / ".venv" / "bin" / "python").exists():
         raise ChainError(f"no .venv in {root}; run scripts/setup-venv.sh first")
     workload = spec.make_workload()
-    progress = workload.progress(Path(spec.rundir))  # StateError: let the caller say
+    progress = workload.progress(Path(spec.rundir))
     if progress.done:
         raise ChainError(f"the run in {spec.rundir} is done: {progress.text}")
     if workload.needs_hq and not ((root / "bin" / "hq").exists() or shutil.which("hq")):
@@ -484,15 +493,24 @@ def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
     if rev == "unknown":
         log.warning("warning: no REVISION file and no git; the runs will not record "
                     "which code they ran (scripts/sync.sh push writes REVISION)")
-    if site.local_venv and venv_stale(root):
+    return Plan(site, progress, rev, site.local_venv and venv_stale(root))
+
+
+def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
+    """Check (see `check()`) and save a new chain in an existing run
+    directory and submit its first link; returns the job id. With
+    `submit_first=False`, returns the spec's path instead, to run
+    `python -m gutsrun.slurm link <spec> 1` by hand."""
+    plan = check(spec, night)
+    if plan.pack:
         log.info("packing .venv into bin/venv.tar")
-        pack_venv(root)
+        pack_venv(spec.root)
     spec.dir.mkdir(exist_ok=True)
     spec.stop_file.unlink(missing_ok=True)
     spec.save()
     note(spec, "chain", name=spec.name, site=spec.site, time=spec.time, links=spec.links,
-         revision=rev, progress=progress.text)
-    return submit(spec, site, 1) if submit_first else str(spec.path)
+         revision=plan.revision, progress=plan.progress.text)
+    return submit(spec, plan.site, 1) if submit_first else str(spec.path)
 
 
 def status(spec: Spec) -> tuple[list[str], bool]:
