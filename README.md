@@ -57,6 +57,10 @@ gutsrun-infretis status --follow   # again when a link changes (progress: every 
 gutsrun-infretis stop              # stop the chain; restart.toml stays valid
 ```
 
+A `stop` within about a second of a link starting can show that link as
+"failed (exit -15)": infretis was still loading and had written nothing, so
+the run continues normally with the next `submit`.
+
 (The examples call it by its path once; with `.venv/bin` on your `PATH`,
 `gutsrun-infretis` is enough.) `status` exits with 0 once none of the
 chain's jobs is queued or running, and 10 while some are, for scripts.

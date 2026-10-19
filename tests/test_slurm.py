@@ -17,10 +17,12 @@ from pathlib import Path
 import pytest
 from conftest import wait_for
 
+import gutsrun.slurm as slurm
 import gutsrun_infretis.chain as cli
 from gutsrun.slurm import (
     ChainError,
     Forwarder,
+    Report,
     Site,
     Spec,
     StateError,
@@ -366,9 +368,9 @@ def test_status_reports_progress_and_each_link(project, monkeypatch, capsys):
     report = status(spec)
     assert not report.active and report.links[1].endswith("cancelled before it started")
     assert report.over is not None
-    assert report.over.startswith(f"link 1: stopped at the walltime; see {spec.dir}/link1-")
+    assert report.over.startswith(f"link 2 was cancelled before it started; see {spec.dir}/link1-")
     follow(spec, interval=0)  # returns: nothing left in the queue
-    assert "chain over: link 1" in capsys.readouterr().out
+    assert "chain over: link 2" in capsys.readouterr().out
 
     project.use_fakes(monkeypatch)
     report = status(spec)
@@ -379,16 +381,50 @@ def test_why_a_chain_is_over(project):
     spec = project.make_spec(links=2)
     project.rundir.joinpath(".gutsrun").mkdir()
 
-    def ended(link: int, result: str) -> dict:
-        return {"link": link, "job": "7", "result": result}
+    def submitted(link: int) -> dict:
+        return {"event": "submitted", "link": link, "job": str(link)}
 
-    assert why_over(spec, ended(1, "done")) == "the run is done"
-    assert why_over(spec, ended(2, "stopped at the walltime")) == (
+    def started(link: int) -> dict:
+        return {"event": "started", "link": link, "job": str(link), "host": "node1"}
+
+    def ended(link: int, result: str) -> dict:
+        return {"event": "ended", "link": link, "job": str(link), "result": result}
+
+    walltime = [submitted(1), started(1), submitted(2), ended(1, "stopped at the walltime")]
+    assert why_over(spec, [{"event": "chain"}]) == "no link was submitted"
+    assert why_over(spec, [{"event": "chain"}, {"event": "not submitted", "link": 1,
+                                                 "error": "invalid partition"}]) == (
+        "link 1 was not submitted: invalid partition")
+    assert why_over(spec, [submitted(1), started(1), ended(1, "done")]) == "the run is done"
+    assert why_over(spec, [*walltime, started(2), ended(2, "stopped at the walltime")]) == (
         "all 2 links ran; `submit` again to continue")
-    assert why_over(spec, ended(1, "failed (exit 1)")).startswith("link 1: failed (exit 1)")
-    assert why_over(spec, None).startswith("no link ran to the end")
+    assert why_over(spec, [*walltime, started(2), ended(2, "failed (exit 1)")]) == (
+        f"link 2: failed (exit 1); see {spec.dir}/link2-2.out")
+    # The last link, not the last "ended" event, says why.
+    assert why_over(spec, [*walltime, started(2)]) == (
+        f"link 2 gone without a word after starting on node1; see {spec.dir}/link2-2.out")
+    assert why_over(spec, walltime) == (
+        f"link 2 was cancelled before it started; see {spec.dir}/link1-1.out")
     spec.stop_file.touch()
-    assert why_over(spec, ended(1, "stopped by request")).startswith("stopped by request")
+    assert why_over(spec, walltime).startswith("stopped by request")
+    # Done wins over a stop that came after the end.
+    assert why_over(spec, [*walltime, started(2), ended(2, "done")]) == "the run is done"
+
+
+def test_follow_shows_progress_that_changed_inside_the_quiet_window(project, monkeypatch):
+    spec = project.make_spec()
+    clock = [0.0]
+    progress = ["step 1", "step 2", "step 2", "step 2", "step 2"]
+    reports = iter([Report(p, [], ["1 RUNNING"], None, True) for p in progress]
+                   + [Report("step 2", [], ["1 ended"], "done", False)])
+    printed = []
+    monkeypatch.setattr(slurm, "status", lambda _spec: next(reports))
+    monkeypatch.setattr(slurm.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(slurm.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr("builtins.print", lambda *a, **_: printed.append(a[1]))
+    follow(spec, interval=100, progress_every=300)
+    # t=0 first report; t=100 step 2 is too soon; t=300 shows it; t=500 the end.
+    assert printed == ["step 1", "step 2", "step 2"]
 
 
 def test_stop_cancels_queued_links_and_signals_the_running_one(project, monkeypatch):

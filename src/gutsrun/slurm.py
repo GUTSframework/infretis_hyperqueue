@@ -36,6 +36,9 @@ Each link:
 6. Runs the workload's command in the run directory, passing SIGTERM and
    SIGINT on. Slurm sends SIGTERM `margin` seconds before the walltime
    (`--signal=B:TERM@margin`), and may send it up to 60 s earlier than asked.
+   A signal that comes before the workload has set up its own handler
+   (for infretis: while it imports, about a second) kills it; the link then
+   reports "failed (exit -15)", although nothing was written.
 7. Cancels the next link if the run is done, failed or stopped, or the link
    itself crashed. A workload exits with EXIT_STOPPED when a signal stopped
    it and it can continue.
@@ -548,18 +551,36 @@ class Report:
         return [self.progress, *self.links] + ([f"chain over: {self.over}"] if self.over else [])
 
 
-def why_over(spec: Spec, last: dict[str, Any] | None) -> str:
-    """Why a chain with no job left is over, from the last link's "ended" event."""
+def why_over(spec: Spec, record: list[dict[str, Any]]) -> str:
+    """Why a chain with no job left is over, from its record: the run is
+    done, the chain was stopped or never submitted, or else what happened
+    to its last link."""
+    ended = {(e["link"], e["job"]): e for e in record if e["event"] == "ended"}
+    started = {(e["link"], e["job"]): e for e in record if e["event"] == "started"}
+    if any(e["result"].startswith("done") for e in ended.values()):
+        return "the run is done"
     if spec.stop_file.exists():
         return "stopped by request; `submit` again to continue"
-    if last is None:
-        return "no link ran to the end; see the link logs"
-    if last["result"].startswith("done"):
-        return "the run is done"
-    if last["result"] == "stopped at the walltime" and last["link"] >= spec.links:
-        return f"all {spec.links} links ran; `submit` again to continue"
-    log_file = spec.dir / f"link{last['link']}-{last['job']}.out"
-    return f"link {last['link']}: {last['result']}; see {log_file}"
+    if refused := [e for e in record if e["event"] == "not submitted"]:
+        return f"link {refused[-1]['link']} was not submitted: {refused[-1]['error']}"
+    jobs = list(dict.fromkeys((e["link"], e["job"]) for e in record
+                              if e["event"] in ("submitted", "started")))
+    if not jobs:
+        return "no link was submitted"
+    link, job = jobs[-1]
+    log_file = spec.dir / f"link{link}-{job}.out"
+    if (link, job) in ended:
+        result = ended[(link, job)]["result"]
+        if result == "stopped at the walltime" and link >= spec.links:
+            return f"all {spec.links} links ran; `submit` again to continue"
+        return f"link {link}: {result}; see {log_file}"
+    if (link, job) in started:
+        return (f"link {link} gone without a word after starting on "
+                f"{started[(link, job)]['host']}; see {log_file}")
+    before = [(n, j) for n, j in jobs if n == link - 1]
+    where = (f"; see {spec.dir / f'link{before[-1][0]}-{before[-1][1]}.out'}"
+             if before else "")
+    return f"link {link} was cancelled before it started{where}"
 
 
 def status(spec: Spec) -> Report:
@@ -598,10 +619,7 @@ def status(spec: Spec) -> Report:
         elif queued is not None:
             links.append(f"{head} cancelled before it started")
             states.append(f"{link} cancelled")
-    over = None
-    if not active and record:
-        endings = [e for e in record if e["event"] == "ended"]
-        over = why_over(spec, endings[-1] if endings else None)
+    over = why_over(spec, record) if not active and record else None
     return Report(progress, links, states, over, active)
 
 
@@ -609,17 +627,17 @@ def follow(spec: Spec, interval: float = 30, progress_every: float = 300) -> Non
     """Print the report when a link's state changes, and otherwise at most
     every `progress_every` seconds while the run progresses; until no job
     of the chain is left."""
-    last: Report | None = None
+    shown: Report | None = None  # the report last printed
     printed = 0.0
     while True:
         report = status(spec)
-        changed = last is None or report.states != last.states
-        progressed = (last is not None and report.progress != last.progress
+        changed = shown is None or report.states != shown.states
+        progressed = (shown is not None and report.progress != shown.progress
                       and time.monotonic() - printed >= progress_every)
         if changed or progressed or not report.active:
             print(f"--- {datetime.now():%H:%M:%S}", *report.lines(), sep="\n", flush=True)
             printed = time.monotonic()
-        last = report
+            shown = report
         if not report.active:
             return
         time.sleep(interval)
