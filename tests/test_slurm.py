@@ -28,10 +28,10 @@ exclusive = true
 
 [python]
 interpreter = "{python}"
-local_venv = {local_venv}
 
-[paths]
+[node]
 local_disk = "{local_disk}"
+local_venv = {local_venv}
 """
 
 FAKE_SBATCH = """\

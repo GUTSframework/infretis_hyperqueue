@@ -25,7 +25,7 @@ Each link:
    nodes) is the one in force, and a process may raise it up to the hard
    limit. An HQ server and worker with many tasks hold many files and
    sockets at once.
-4. If the site sets `local_venv`, unpacks bin/venv.tar to node-local disk
+4. If the site sets `[node] local_venv`, unpacks bin/venv.tar to node-local disk
    and runs that copy: starting Python from a node-local disk is faster
    than from NFS, and spares the file server. First removes copies left by
    jobs that are gone (a job killed at its walltime skips its cleanup).
@@ -151,15 +151,14 @@ class Site:
 
     def __init__(self, root: str | Path, name: str):
         self.data = tomllib.loads((Path(root) / "sites" / f"{name}.toml").read_text())
-        slurm, python = self.data["slurm"], self.data["python"]
+        slurm, python, node = self.data["slurm"], self.data["python"], self.data["node"]
         self.partition: str = slurm["partition"]
         self.exclusive: bool = slurm.get("exclusive", False)
         self.max_walltime_day: str = slurm["max_walltime_day"]
         self.cores: int = int(os.environ.get("GUTSRUN_CORES") or slurm["cores_per_node"])
         self.interpreter: str = python["interpreter"]
-        self.local_venv: bool = python.get("local_venv", False)
-        self.local_disk: str = (os.environ.get("GUTSRUN_LOCAL_DISK")
-                                or self.data["paths"]["local_disk"])
+        self.local_venv: bool = node.get("local_venv", False)
+        self.local_disk: str = os.environ.get("GUTSRUN_LOCAL_DISK") or node["local_disk"]
 
 
 def setup_logging() -> None:

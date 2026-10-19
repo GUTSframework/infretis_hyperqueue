@@ -34,10 +34,15 @@ What the code and job scripts rely on. Measured facts and numbers (nodes,
 storage, NFS timings, cold start): vault note
 `notes/2026-10-16-das-6-compute-nodes-and-home-nfs.md`.
 
-- We have an account. Partition `defq`; Slurm commands work without
+- We have an account. The login node is reachable only from a university
+  network or through eduVPN.
+- Partition `defq` (32 nodes of 24 cores); Slurm commands work without
   `module load prun`. Never pass `--mem`: Slurm has no memory configured.
+  Accounting is disabled (`sacct` does not work): a job's own log is the
+  only record of how it ended.
 - Jobs are limited to 15 min walltime 08:00–20:00; longer runs only at night
-  or weekends, or with permission from das-sysadm@cs.vu.nl.
+  or weekends, or with permission from das-sysadm@cs.vu.nl. Our own rule: at
+  most 2 nodes at a time during the day.
 - Program execution must happen on compute nodes, never on the head node.
 - `/home` (NFS) is shared between fs0 and the compute nodes. Anything that
   waits for another node's file lists the directory, never retries
@@ -49,6 +54,9 @@ storage, NFS timings, cold start): vault note
 - Workers run a node-local copy of the venv, unpacked to `/local` at job
   start (plan decision 15), so everything is called as `python -m`:
   entry-point scripts keep the `/home` venv in their shebang.
+- Node-local disk at `/local` (NVMe); shared scratch at `/var/scratch/$USER`
+  (40 GB quota); `/home` has a 5 GB quota.
+- The soft limit on open files in a job is 1024 (hard: 131072).
 - No GROMACS or LAMMPS from the site. Engines come the way researchers get
   theirs; which way is open.
 - GPU nodes for chignolin: unknown.
