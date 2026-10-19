@@ -29,9 +29,24 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from gutsrun.slurm import (ROOT, ChainError, Progress, Site, Spec, StateError, check, follow,
-                           load_spec, sbatch_argv, seconds, setup_logging, start, status,
-                           stop, walltime)
+from gutsrun.slurm import (
+    ROOT,
+    ChainError,
+    Progress,
+    Site,
+    Spec,
+    StateError,
+    check,
+    follow,
+    load_spec,
+    sbatch_argv,
+    seconds,
+    setup_logging,
+    start,
+    status,
+    stop,
+    walltime,
+)
 
 EXIT_ACTIVE = 10  # `status`: some job of the chain is still queued or running
 

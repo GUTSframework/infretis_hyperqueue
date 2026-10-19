@@ -134,6 +134,7 @@ class Spec:
 
     @property
     def dir(self) -> Path:
+        """<rundir>/.gutsrun/, where the chain's own files go."""
         return Path(self.rundir) / ".gutsrun"
 
     @property
@@ -149,6 +150,7 @@ class Spec:
         return self.dir / "stop"
 
     def save(self) -> None:
+        """Write the spec to `path`, for the links to read."""
         self.path.write_text(json.dumps(asdict(self), indent=2) + "\n")
 
     @classmethod
@@ -156,6 +158,7 @@ class Spec:
         return cls(**json.loads(Path(path).read_text()))
 
     def make_workload(self) -> Workload:
+        """Import the workload's class (also from `pythonpath`) and create it."""
         for path in reversed(self.pythonpath):
             if path not in sys.path:
                 sys.path.insert(0, path)
@@ -179,7 +182,7 @@ class Site:
     KEYS = {"slurm": {"partition", "cores_per_node", "exclusive", "max_walltime_day"},
             "node": {"local_venv", "local_disk"}}
 
-    def __init__(self, root: str | Path, name: str):
+    def __init__(self, root: str | Path, name: str) -> None:
         path = Path(root) / "sites" / f"{name}.toml"
         if not path.exists():
             known = sorted(p.stem for p in path.parent.glob("*.toml") if p.stem != "template")
@@ -524,6 +527,7 @@ class Report:
     active: bool  # a job of the chain is queued or running (or squeue does not answer)
 
     def lines(self) -> list[str]:
+        """The report as text, one line each."""
         return [self.progress, *self.links] + ([f"chain over: {self.over}"] if self.over else [])
 
 
@@ -536,8 +540,9 @@ def why_over(spec: Spec, last: dict[str, Any] | None) -> str:
     if last["result"].startswith("done"):
         return "the run is done"
     if last["result"] == "stopped at the walltime" and last["link"] >= spec.links:
-        return (f"all {spec.links} links ran; `submit` again to continue")
-    return f"link {last['link']}: {last['result']}; see {spec.dir}/link{last['link']}-{last['job']}.out"
+        return f"all {spec.links} links ran; `submit` again to continue"
+    log_file = spec.dir / f"link{last['link']}-{last['job']}.out"
+    return f"link {last['link']}: {last['result']}; see {log_file}"
 
 
 def status(spec: Spec) -> Report:

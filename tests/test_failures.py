@@ -8,10 +8,10 @@ import sys
 import time
 from pathlib import Path
 
-import pytest
-
 import helpers
+import pytest
 from conftest import wait_for
+
 from gutsrun import TaskExecutor
 from gutsrun.backends.local import LocalBackend
 
@@ -28,6 +28,7 @@ def test_coordinator_restart_with_tasks_in_flight(tmp_path):
     old = subprocess.Popen(
         [sys.executable, str(HERE / "coordinator.py"), str(spool_dir), str(started), "3", "2"],
         stdout=subprocess.PIPE, text=True, env=env)
+    assert old.stdout is not None
     old_epoch = old.stdout.readline().strip()
     wait_for(lambda: len(list(tmp_path.glob("started*"))) == 2, what="old tasks started")
     old.send_signal(signal.SIGKILL)

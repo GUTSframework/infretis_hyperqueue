@@ -14,6 +14,29 @@ gutsrun-infretis = "gutsrun_infretis.chain:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Copied from infentory unchanged (PROVENANCE.md).
+extend-exclude = ["examples"]
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle, import order, bugbear, pyupgrade, type annotations
+select = ["F", "E", "W", "I", "B", "UP", "ANN"]
+# Any is the honest type for calls passed through (*args, **kwargs).
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test functions and fixtures: annotations would add nothing for a reader.
+"tests/test_*.py" = ["ANN"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+include = ["src", "tests", "bench"]
+extraPaths = ["src", "tests", "bench"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]
 testpaths = ["tests"]

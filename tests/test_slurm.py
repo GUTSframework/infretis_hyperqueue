@@ -15,13 +15,27 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from conftest import wait_for
 
 import gutsrun_infretis.chain as cli
-from gutsrun.slurm import (ChainError, Site, Spec, StateError, events, follow, load_spec,
-                           note, seconds, start, status, stop, venv_stale, walltime,
-                           why_over)
+from gutsrun.slurm import (
+    ChainError,
+    Site,
+    Spec,
+    StateError,
+    events,
+    follow,
+    load_spec,
+    note,
+    seconds,
+    start,
+    status,
+    stop,
+    venv_stale,
+    walltime,
+    why_over,
+)
 from gutsrun_infretis.chain import InfretisRun
-from conftest import wait_for
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -100,12 +114,15 @@ class Project:
         start(spec, submit_first=False)
         return spec
 
-    def link(self, spec: Spec, n: int, wait: bool = True, **env):
+    def start_link(self, spec: Spec, n: int, **env: str) -> subprocess.Popen[str]:
+        """Start link `n` as a process, as Slurm would."""
         argv = [sys.executable, "-m", "gutsrun.slurm", "link", str(spec.path), str(n)]
-        proc = subprocess.Popen(argv, cwd=self.root, env={**self.env, **env},
+        return subprocess.Popen(argv, cwd=self.root, env={**self.env, **env},
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        if not wait:
-            return proc
+
+    def link(self, spec: Spec, n: int, **env: str) -> tuple[int, str]:
+        """Run link `n` to its end; its exit code and output."""
+        proc = self.start_link(spec, n, **env)
         out, _ = proc.communicate(timeout=120)
         return proc.returncode, out
 
@@ -227,7 +244,7 @@ def test_done_cancels_the_pre_submitted_link(project):
 
 def test_sigterm_stops_and_the_next_link_continues(project):
     spec = project.spec(steps=200, delay=0.02)
-    proc = project.link(spec, 1, wait=False)
+    proc = project.start_link(spec, 1)
     wait_for(lambda: (project.rundir / "state.json").exists() and step(spec) >= 3,
              what="workload progress")
     proc.send_signal(signal.SIGTERM)
@@ -276,7 +293,7 @@ def test_finished_run_makes_later_links_exit_at_once(project):
 
 def test_status_reports_progress_and_each_link(project, monkeypatch, capsys):
     spec = project.spec(links=3, steps=200, delay=0.02)
-    proc = project.link(spec, 1, wait=False)
+    proc = project.start_link(spec, 1)
     wait_for(lambda: (project.rundir / "state.json").exists(), what="workload progress")
     proc.send_signal(signal.SIGTERM)
     proc.communicate(timeout=60)
@@ -296,6 +313,7 @@ def test_status_reports_progress_and_each_link(project, monkeypatch, capsys):
     project.use_fakes(monkeypatch, squeue="")
     report = status(spec)
     assert not report.active and report.links[1].endswith("cancelled before it started")
+    assert report.over is not None
     assert report.over.startswith(f"link 1: stopped at the walltime; see {spec.dir}/link1-")
     follow(spec, interval=0)  # returns: nothing left in the queue
     assert "chain over: link 1" in capsys.readouterr().out
@@ -334,7 +352,7 @@ def test_stop_cancels_queued_links_and_signals_the_running_one(project, monkeypa
 
 def test_a_stopped_chain_cancels_its_next_link_and_runs_no_more(project):
     spec = project.spec(links=3, steps=200, delay=0.02)
-    proc = project.link(spec, 1, wait=False)
+    proc = project.start_link(spec, 1)
     wait_for(lambda: (project.rundir / "state.json").exists(), what="workload progress")
     spec.stop_file.touch()
     proc.send_signal(signal.SIGTERM)

@@ -30,8 +30,10 @@ import shutil
 import sys
 import threading
 import time
+from collections.abc import Callable, Iterable
 from concurrent.futures import Executor, Future
 from pathlib import Path
+from typing import Any, TypeVar
 
 from gutsrun import spool
 from gutsrun.backends import Backend, Resources
@@ -39,6 +41,8 @@ from gutsrun.backends import Backend, Resources
 log = logging.getLogger(__name__)
 
 _SRC = str(Path(__file__).resolve().parent.parent)  # makes `gutsrun` importable in tasks
+
+T = TypeVar("T")
 
 
 class TaskFailed(Exception):
@@ -48,16 +52,35 @@ class TaskFailed(Exception):
 class RemoteTraceback(Exception):
     """Carries the task-side traceback, as `__cause__` (like ProcessPoolExecutor)."""
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.args[0]
 
 
 class TaskExecutor(Executor):
-    def __init__(self, backend: Backend, spool_dir, *, max_workers: int | None = None,
-                 initializer=None, initargs=(), resource_dict: dict | None = None,
+    """Runs each submitted call as one task of `backend`, a fresh
+    `python -m gutsrun.task` process; see the module docstring.
+
+    - `spool_dir`: where calls, results and task logs go; on a file system
+      the tasks can reach. A new executor takes it over from an old one.
+    - `max_workers`: informational, for code that reads it; the backend
+      limits how many tasks run at once.
+    - `initializer(*initargs)`: runs in the task process before every call.
+    - `resource_dict`: default resources per call (cores, gpus, cwd, env);
+      `submit(..., resource_dict=...)` overrides them for one call.
+    - `python`: the interpreter tasks run with.
+    - `poll_interval`, `failure_poll_interval`: seconds between looks for
+      results, and between asking the backend about failed tasks.
+    - `keep_failed_logs`: keep a failed task's stdout and stderr.
+    - `timings_path`: append one JSON line of timings per finished task.
+    """
+
+    def __init__(self, backend: Backend, spool_dir: str | Path, *,
+                 max_workers: int | None = None,
+                 initializer: Callable[..., object] | None = None,
+                 initargs: Iterable[Any] = (), resource_dict: dict[str, Any] | None = None,
                  python: str = sys.executable, poll_interval: float = 0.02,
                  failure_poll_interval: float = 2.0, keep_failed_logs: bool = True,
-                 timings_path=None):
+                 timings_path: str | Path | None = None) -> None:
         self.backend = backend
         self.max_workers = max_workers  # informational; the backend limits concurrency
         self.initializer, self.initargs = initializer, tuple(initargs)
@@ -77,7 +100,7 @@ class TaskExecutor(Executor):
         self._take_over_spool()
 
         self._lock = threading.Lock()  # guards _pending, _seq and backend calls
-        self._pending: dict[str, Future] = {}
+        self._pending: dict[str, Future[Any]] = {}
         self._seq = 0
         self._shutdown = False
         self._stop = threading.Event()
@@ -86,7 +109,10 @@ class TaskExecutor(Executor):
 
     # --- Executor API -------------------------------------------------------
 
-    def submit(self, fn, /, *args, resource_dict: dict | None = None, **kwargs):
+    def submit(self, fn: Callable[..., T], /, *args: Any,
+               resource_dict: dict[str, Any] | None = None, **kwargs: Any) -> Future[T]:
+        """Run `fn(*args, **kwargs)` as a task; `resource_dict` overrides
+        the executor's default resources for this call."""
         res = Resources.from_dict(resource_dict, self.default_resources)
         res.env = {**res.env, "PYTHONPATH": _pythonpath(res.env.get("PYTHONPATH"))}
         with self._lock:
@@ -97,7 +123,7 @@ class TaskExecutor(Executor):
             spool.write_atomic(
                 self.dir / "in" / f"{tid}.pkl",
                 spool.dump(sys.path, (fn, args, kwargs, self.initializer, self.initargs)))
-            future = Future()
+            future: Future[T] = Future()
             future.set_running_or_notify_cancel()  # it runs as soon as the backend starts it
             self._pending[tid] = future
             self._submitted[tid] = time.time()
@@ -110,7 +136,10 @@ class TaskExecutor(Executor):
                 raise
         return future
 
-    def shutdown(self, wait=True, *, cancel_futures=False):
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+        """Accept no more calls; with `wait`, wait for the pending ones.
+        `cancel_futures` cancels the pending tasks instead. Calls still
+        pending after that fail with TaskFailed."""
         with self._lock:
             self._shutdown = True
             if cancel_futures:
@@ -128,7 +157,7 @@ class TaskExecutor(Executor):
         self._watcher.join()
         with self._lock:
             self.backend.close()
-            for tid, fut in self._pending.items():
+            for fut in self._pending.values():
                 fut.set_exception(TaskFailed("executor shut down"))
             self._pending.clear()
             if self._timings:
@@ -136,7 +165,7 @@ class TaskExecutor(Executor):
 
     # --- internals ------------------------------------------------------------
 
-    def _take_over_spool(self):
+    def _take_over_spool(self) -> None:
         """Make this epoch the live one; tasks of older epochs stop publishing.
 
         Older epoch directories are removed. A stale task still writing into
@@ -147,7 +176,7 @@ class TaskExecutor(Executor):
             if d.is_dir() and d.name != self.epoch:
                 shutil.rmtree(d, ignore_errors=True)
 
-    def _watch(self):
+    def _watch(self) -> None:
         last_failure_poll = time.monotonic()
         while not self._stop.is_set():
             try:
@@ -159,7 +188,7 @@ class TaskExecutor(Executor):
                 log.exception("gutsrun watcher")
             self._stop.wait(self.poll_interval)
 
-    def _collect_results(self):
+    def _collect_results(self) -> None:
         out = self.dir / "out"
         for name in os.listdir(out):
             parsed = spool.parse_result_name(name)
@@ -177,7 +206,8 @@ class TaskExecutor(Executor):
                     published = pickle.load(f)
                 result = published["result"]
             except Exception as e:
-                published, result = {}, ("err", TaskFailed(f"task {tid}: unreadable result: {e!r}"), "")
+                failed = TaskFailed(f"task {tid}: unreadable result: {e!r}")
+                published, result = {}, ("err", failed, "")
             self._record_timings(tid, published.get("t", {}))
             if result[0] == "ok":
                 fut.set_result(result[1])
@@ -192,7 +222,7 @@ class TaskExecutor(Executor):
                 self.backend.release(tid)
             self._cleanup(tid, keep_logs=False)
 
-    def _record_timings(self, tid, t):
+    def _record_timings(self, tid: str, t: dict[str, Any]) -> None:
         submitted = self._submitted.pop(tid, None)
         if self._timings is None:
             return
@@ -200,7 +230,7 @@ class TaskExecutor(Executor):
         self._timings.write(json.dumps(row) + "\n")
         self._timings.flush()
 
-    def _collect_failures(self):
+    def _collect_failures(self) -> None:
         with self._lock:
             ended = self.backend.poll()
         if not ended:
@@ -218,7 +248,7 @@ class TaskExecutor(Executor):
             fut.set_exception(TaskFailed(f"task {tid}: {msg}{self._stderr_tail(tid)}"))
             self._cleanup(tid, keep_logs=self.keep_failed_logs)
 
-    def _stderr_tail(self, tid, n=20):
+    def _stderr_tail(self, tid: str, n: int = 20) -> str:
         tails = []
         for p in sorted((self.dir / "log").glob(f"{tid}.*.err")):
             lines = p.read_text(errors="replace").splitlines()[-n:]
@@ -226,7 +256,7 @@ class TaskExecutor(Executor):
                 tails.append(f"\n--- {p.name} ---\n" + "\n".join(lines))
         return "".join(tails)
 
-    def _cleanup(self, tid, keep_logs):
+    def _cleanup(self, tid: str, keep_logs: bool) -> None:
         (self.dir / "in" / f"{tid}.pkl").unlink(missing_ok=True)
         for p in (self.dir / "out").glob(f"{tid}.*.pkl"):
             p.unlink(missing_ok=True)

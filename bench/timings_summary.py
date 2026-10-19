@@ -18,6 +18,7 @@ import argparse
 import json
 import statistics
 from pathlib import Path
+from typing import Any
 
 PHASES = {
     "dispatch": ("submitted", "start"),
@@ -28,14 +29,14 @@ PHASES = {
 }
 
 
-def quantile(values, q):
+def quantile(values: list[float], q: float) -> float:
     s = sorted(values)
     idx = q * (len(s) - 1)
     lo, hi = int(idx), min(int(idx) + 1, len(s) - 1)
     return s[lo] + (s[hi] - s[lo]) * (idx - lo)
 
 
-def summarise(path: Path) -> dict:
+def summarise(path: Path) -> dict[str, Any]:
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     rows = [r for r in rows if all(r.get(k) is not None for k in
                                    ("submitted", "start", "loaded", "inited", "done", "collected"))]
@@ -52,8 +53,8 @@ def summarise(path: Path) -> dict:
     return out
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def main() -> None:
+    p = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     p.add_argument("files", nargs="+", type=Path)
     p.add_argument("--json", action="store_true")
     args = p.parse_args()

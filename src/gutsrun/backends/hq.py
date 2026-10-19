@@ -20,6 +20,7 @@ One job per task, so a finished task can be forgotten on its own
 import logging
 import shutil
 import subprocess
+from pathlib import Path
 
 from hyperqueue import Client, Job
 from hyperqueue.ffi.protocol import ResourceRequest
@@ -28,8 +29,13 @@ from gutsrun.backends import Resources
 
 
 class HQBackend:
-    def __init__(self, server_dir: str | None = None, *, crash_limit: int = 2,
-                 gpu_resource: str = "gpus/nvidia", hq_bin: str | None = None):
+    """Tasks as HQ jobs on the server in `server_dir` (default:
+    $HQ_SERVER_DIR, then HQ's own default). `crash_limit`: how often HQ
+    reruns a task whose worker crashed. `gpu_resource`: the HQ resource
+    name for Resources.gpus. `hq_bin`: the hq CLI, for cancelling."""
+
+    def __init__(self, server_dir: str | Path | None = None, *, crash_limit: int = 2,
+                 gpu_resource: str = "gpus/nvidia", hq_bin: str | None = None) -> None:
         # server_dir must be a str: the FFI rejects pathlib.Path.
         self.server_dir = None if server_dir is None else str(server_dir)
         root = logging.getLogger()
@@ -42,7 +48,8 @@ class HQBackend:
         self._jobs: dict[str, int] = {}  # tid -> HQ job id, until forgotten
         self._to_forget: set[str] = set()
 
-    def submit(self, tid, argv, res: Resources, stdout, stderr):
+    def submit(self, tid: str, argv: list[str], res: Resources, stdout: str,
+               stderr: str) -> None:
         job = Job()
         request = ResourceRequest(
             cpus=res.cores,
@@ -54,12 +61,12 @@ class HQBackend:
             resources=request, crash_limit=self.crash_limit)
         self._jobs[tid] = self.client.submit(job).id
 
-    def poll(self):
+    def poll(self) -> list[tuple[str, str | None]]:
         self._forget_pending()
         live = {jid: tid for tid, jid in self._jobs.items() if tid not in self._to_forget}
         if not live:
             return []
-        ended = []
+        ended: list[tuple[str, str | None]] = []
         failed = self.client.connection.get_failed_tasks(list(live))
         for jid, tasks in failed.items():
             for ctx in tasks.values():
@@ -68,12 +75,12 @@ class HQBackend:
                 self._to_forget.add(tid)
         return ended
 
-    def release(self, tid):
+    def release(self, tid: str) -> None:
         if tid in self._jobs:
             self._to_forget.add(tid)
             self._forget_pending()
 
-    def _forget_pending(self):
+    def _forget_pending(self) -> None:
         for tid in list(self._to_forget):
             try:
                 self.client.forget(self._jobs[tid])
@@ -82,7 +89,7 @@ class HQBackend:
             del self._jobs[tid]
             self._to_forget.discard(tid)
 
-    def cancel(self, tid):
+    def cancel(self, tid: str) -> None:
         jid = self._jobs.get(tid)
         if jid is None or self.hq_bin is None:
             return
@@ -92,7 +99,7 @@ class HQBackend:
         subprocess.run(cmd, capture_output=True, check=False)
         self._to_forget.add(tid)
 
-    def close(self):
+    def close(self) -> None:
         for tid in list(self._jobs):
             if tid not in self._to_forget:
                 self.cancel(tid)

@@ -11,17 +11,23 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("infretis.setup", exc_type=ImportError)
 
-from gutsrun.backends.local import LocalBackend  # noqa: E402
 from conftest import wait_for  # noqa: E402
+
+from gutsrun.backends.local import LocalBackend  # noqa: E402
 from gutsrun_infretis.launcher import (  # noqa: E402
-    EXIT_DONE, EXIT_STOPPED, HOLD_ENV, InfretisExecutor, changed_sources, strip_pinning)
+    EXIT_DONE,
+    EXIT_STOPPED,
+    HOLD_ENV,
+    InfretisExecutor,
+    changed_sources,
+    strip_pinning,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 BARE_RUN = ROOT / "bench" / "bare_run.py"
@@ -168,4 +174,5 @@ def test_exact_lammps_workers_1(tmp_path):
     run("water_dissociation_lammps", tmp_path / "bare", *common)
     run("water_dissociation_lammps", tmp_path / "guts", *common, "--runner", "gutsrun")
     for name in ("infretis_data.txt", "restart.toml"):
-        assert (tmp_path / "bare" / name).read_bytes() == (tmp_path / "guts" / name).read_bytes(), name
+        bare, guts = (tmp_path / "bare" / name), (tmp_path / "guts" / name)
+        assert bare.read_bytes() == guts.read_bytes(), name

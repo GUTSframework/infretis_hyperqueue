@@ -4,8 +4,9 @@ Loads `in/<tid>.pkl`, runs the initializer and then the call, and writes
 `out/<tid>.<instance>.pkl`: {"result": ("ok", value) or ("err", exception,
 traceback text), "t": timings}. The timings are wall-clock times
 (`time.time()`) at the runner's start, after unpickling the call (which
-imports its modules), after the initializer, and after the call. An exception in the call is a result, not a failure: the process
-still exits 0. A non-zero exit means the task itself broke.
+imports its modules), after the initializer, and after the call. An
+exception in the call is a result, not a failure: the process still exits
+0. A non-zero exit means the task itself broke.
 
 The instance is HQ_INSTANCE_ID under HyperQueue (it goes up when HQ reruns
 the task after a worker crash), GUTSRUN_INSTANCE under the local backend.
@@ -22,13 +23,14 @@ import os  # noqa: E402
 import pickle  # noqa: E402
 import sys  # noqa: E402
 from pathlib import Path  # noqa: E402
+from typing import Any  # noqa: E402
 
-from gutsrun import spool
+from gutsrun import spool  # noqa: E402
 
 EXIT_STALE = 0  # a stale task is not an error; nobody waits for it
 
 
-def _publish(epoch_dir: Path, tid: str, result: tuple, t: dict) -> None:
+def _publish(epoch_dir: Path, tid: str, result: tuple[Any, ...], t: dict[str, Any]) -> None:
     instance = os.environ.get("HQ_INSTANCE_ID") or os.environ.get("GUTSRUN_INSTANCE", "0")
     t.update(instance=instance, host=os.uname().nodename)
     try:
@@ -56,9 +58,10 @@ def main(argv: list[str]) -> int:
             if p not in sys.path:
                 sys.path.insert(0, p)
         call = pickle.load(f)
-    t = {"start": T_START, "loaded": time.time()}
+    t: dict[str, Any] = {"start": T_START, "loaded": time.time()}
     fn, args, kwargs, initializer, initargs = call
 
+    result: tuple[Any, ...]
     try:
         if initializer is not None:
             initializer(*initargs)

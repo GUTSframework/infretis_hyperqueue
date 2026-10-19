@@ -6,10 +6,12 @@ The exports load lazily: every task process imports this package (for
 `gutsrun.task`), and should not pay for the executor's imports.
 """
 
+from typing import Any
+
 _EXPORTS = {"TaskExecutor", "TaskFailed", "RemoteTraceback"}
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     if name in _EXPORTS:
         from gutsrun import executor
         return getattr(executor, name)

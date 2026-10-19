@@ -25,7 +25,7 @@ from gutsrun import TaskExecutor  # noqa: E402
 from gutsrun.backends.local import LocalBackend  # noqa: E402
 
 
-def timed(ex, repeat):
+def timed(ex: TaskExecutor, repeat: int) -> dict[str, float]:
     times = []
     for i in range(repeat):
         start = time.perf_counter()
@@ -35,8 +35,8 @@ def timed(ex, repeat):
             "min_s": round(min(times), 4), "max_s": round(max(times), 4)}
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def main() -> None:
+    p = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     p.add_argument("--repeat", type=int, default=30)
     p.add_argument("--backends", default="local,hq")
     args = p.parse_args()
@@ -53,6 +53,8 @@ def main():
             return
 
         hq = shutil.which("hq")
+        if hq is None:
+            sys.exit("no hq on PATH (run inside `nix develop`)")
         server_dir = tmp / "hq"
         server = subprocess.Popen([hq, "server", "start", "--server-dir", str(server_dir)],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

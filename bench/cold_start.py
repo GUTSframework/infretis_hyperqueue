@@ -42,15 +42,17 @@ print(f"{t1 - t0} {t2 - t1}")
 """
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def main() -> None:
+    p = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     p.add_argument("rundir", type=Path)
     p.add_argument("--repeat", type=int, default=5)
-    p.add_argument("--concurrent", type=int, default=1, help="children started at once per repetition")
+    p.add_argument("--concurrent", type=int, default=1,
+                   help="children started at once per repetition")
     p.add_argument("--input", default=None, help="config file (default: infretis.toml)")
     args = p.parse_args()
     # setup_config refuses infretis.toml once a restart.toml exists.
-    inp = args.input or ("restart.toml" if (args.rundir / "restart.toml").exists() else "infretis.toml")
+    restart = (args.rundir / "restart.toml").exists()
+    inp = args.input or ("restart.toml" if restart else "infretis.toml")
 
     rows = []
     for _ in range(args.repeat):
@@ -72,7 +74,7 @@ def main():
             imports, init = map(float, stdout.split()[-2:])
             rows.append({"total_s": total, "imports_s": imports, "init_s": init})
 
-    def med(key):
+    def med(key: str) -> float:
         return statistics.median(r[key] for r in rows)
 
     print(json.dumps({

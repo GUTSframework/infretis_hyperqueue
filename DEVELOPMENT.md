@@ -163,6 +163,14 @@ nix develop --command .venv/bin/python -m pytest -m slow  # LAMMPS exact check (
 .venv/bin/python -m pytest -m "not hq"                    # without the dev shell: gutsrun only
 ```
 
+Lint and type check (both configured in `pyproject.toml`; tests are
+exempt from the type-annotation rule):
+
+```bash
+nix develop --command ruff check .
+nix develop --command pyright
+```
+
 The chain tests fake `sbatch`, `scancel` and `squeue` and run links as
 local processes. The HQ tests start `hq server` and `hq worker` processes,
 which need TCP on localhost. They cannot run inside Claude Code's sandbox.

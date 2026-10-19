@@ -42,8 +42,10 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from types import FrameType
+from typing import Any
 
 import tomli
 import tomli_w
@@ -51,8 +53,8 @@ import tomli_w
 EXIT_STOPPED = 3  # as gutsrun_infretis.launcher
 
 
-def parse_args():
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     p.add_argument("example", type=Path, help="prepared example directory")
     p.add_argument("rundir", type=Path, help="run directory to create")
     p.add_argument("--workers", type=int)
@@ -86,7 +88,7 @@ def parse_args():
     return p.parse_args()
 
 
-def set_dotted(config, key, value):
+def set_dotted(config: dict[str, Any], key: str, value: object) -> None:
     *path, last = key.split(".")
     node = config
     for part in path:
@@ -94,7 +96,8 @@ def set_dotted(config, key, value):
     node[last] = value
 
 
-def prepare(args):
+def prepare(args: argparse.Namespace) -> str:
+    """Copy the example to args.rundir and apply the overrides; returns the input file."""
     if args.rundir.exists():
         sys.exit(f"{args.rundir} exists; pick a new run directory")
     shutil.copytree(args.example, args.rundir, ignore=shutil.ignore_patterns("README.md"))
@@ -127,7 +130,7 @@ def prepare(args):
     return "infretis.toml"
 
 
-def git_head(path):
+def git_head(path: Path) -> str | None:
     """Short commit of the repo; on a cluster copy (no .git), the REVISION file
     written by scripts/sync.sh push."""
     try:
@@ -140,7 +143,7 @@ def git_head(path):
         return revision.read_text().strip() if revision.exists() else None
 
 
-def main():
+def main() -> None:
     args = parse_args()
     if args.restart or args.in_place:
         restart = (args.rundir / "restart.toml").exists()
@@ -165,13 +168,13 @@ def main():
     proc = subprocess.Popen(cmd, cwd=args.rundir, env=env, start_new_session=bare)
     stopped_by = None
 
-    def signal_run(signum):
+    def signal_run(signum: int) -> None:
         try:
             os.killpg(proc.pid, signum) if bare else proc.send_signal(signum)
         except ProcessLookupError:
             pass
 
-    def forward(signum, frame):
+    def forward(signum: int, frame: FrameType | None) -> None:
         nonlocal stopped_by
         stopped_by = signal.Signals(signum).name
         signal_run(signum)
@@ -188,7 +191,7 @@ def main():
     wall = time.time() - started
 
     record = {
-        "started": datetime.fromtimestamp(started, timezone.utc).isoformat(),
+        "started": datetime.fromtimestamp(started, UTC).isoformat(),
         "wall_s": round(wall, 3),
         "returncode": proc.returncode,
         "killed_after_s": args.kill_after if killed else None,

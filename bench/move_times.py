@@ -18,11 +18,12 @@ import json
 import re
 import statistics
 from pathlib import Path
+from typing import Any
 
 LINE = re.compile(r"worker: (\d+) total time:([\d.]+)s and subcycles: (\d+)")
 
 
-def quantile(sorted_values, q):
+def quantile(sorted_values: list[float], q: float) -> float | None:
     if not sorted_values:
         return None
     idx = q * (len(sorted_values) - 1)
@@ -30,7 +31,7 @@ def quantile(sorted_values, q):
     return sorted_values[lo] + (sorted_values[hi] - sorted_values[lo]) * (idx - lo)
 
 
-def summarise(rundir):
+def summarise(rundir: Path) -> dict[str, Any]:
     times, subcycles = [], []
     for line in (rundir / "sim.log").read_text().splitlines():
         m = LINE.search(line)
@@ -54,8 +55,8 @@ def summarise(rundir):
     }
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def main() -> None:
+    p = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     p.add_argument("rundirs", nargs="+", type=Path)
     p.add_argument("--json", action="store_true")
     args = p.parse_args()

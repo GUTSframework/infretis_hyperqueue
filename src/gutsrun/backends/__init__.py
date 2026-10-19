@@ -6,7 +6,7 @@ through the spool directory.
 """
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass
@@ -19,7 +19,8 @@ class Resources:
     env: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, d: dict | None, default: "Resources") -> "Resources":
+    def from_dict(cls, d: dict[str, Any] | None, default: "Resources") -> "Resources":
+        """`default`, with the keys in `d` replaced (`env` is merged)."""
         if not d:
             return default
         unknown = set(d) - {"cores", "gpus", "cwd", "env"}
@@ -34,6 +35,8 @@ class Resources:
 
 
 class Backend(Protocol):
+    """Starts task processes and reports the ones that failed."""
+
     def submit(self, tid: str, argv: list[str], res: Resources, stdout: str, stderr: str) -> None:
         """Start (or queue) a task. `stdout`/`stderr` contain `{instance}`."""
 
@@ -41,6 +44,7 @@ class Backend(Protocol):
         """Tasks that ended since the last call: (tid, None) for a clean
         exit, (tid, message) for a failure. A backend may only report
         failures; the executor learns of clean ends from result files."""
+        ...
 
     def release(self, tid: str) -> None:
         """The executor has the task's result; forget the task."""

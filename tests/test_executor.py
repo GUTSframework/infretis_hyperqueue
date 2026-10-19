@@ -7,12 +7,11 @@ import os
 import pickle
 import time
 
-import pytest
-
 import helpers
+import pytest
 from conftest import wait_for
-from gutsrun import RemoteTraceback, TaskFailed
-from gutsrun import spool
+
+from gutsrun import RemoteTraceback, TaskFailed, spool
 
 
 def test_happy_path(make_executor):
@@ -71,10 +70,12 @@ def test_first_result_wins_duplicates_ignored(make_executor, tmp_path):
     tid = "00000000"
     wait_for(lambda: list(tmp_path.glob("started.*")), what="task started")
     # A competing result (as from an HQ rerun) arrives first.
-    spool.write_atomic(ex.dir / "out" / spool.result_name(tid, "9"), spool.dump({"result": ("ok", "first"), "t": {}}))
+    spool.write_atomic(ex.dir / "out" / spool.result_name(tid, "9"),
+                       spool.dump({"result": ("ok", "first"), "t": {}}))
     assert fut.result(timeout=60) == "first"
     # So does a result for a task nobody submitted.
-    spool.write_atomic(ex.dir / "out" / spool.result_name("99999999", "0"), spool.dump({"result": ("ok", 1), "t": {}}))
+    spool.write_atomic(ex.dir / "out" / spool.result_name("99999999", "0"),
+                       spool.dump({"result": ("ok", 1), "t": {}}))
     # The real task finishes after ~1 s; its late result must be dropped too.
     time.sleep(2.5)
     assert os.listdir(ex.dir / "out") == []

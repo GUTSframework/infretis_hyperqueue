@@ -20,8 +20,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from gutsrun.slurm import (ROOT, ChainError, Site, Spec, StateError, check_time,
-                           setup_logging, start)
+from gutsrun.slurm import ROOT, ChainError, Site, Spec, StateError, check_time, setup_logging, start
 from gutsrun_infretis.chain import InfretisRun
 
 CASES = {"2d": "examples/2d_potential", "lammps": "examples/water_dissociation_lammps"}

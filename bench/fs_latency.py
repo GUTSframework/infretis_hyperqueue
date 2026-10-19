@@ -35,13 +35,14 @@ import time
 from pathlib import Path
 
 
-def write(path: Path, text: str):
+def write(path: Path, text: str) -> None:
     tmp = path.with_name("." + path.name + ".tmp")
     tmp.write_text(text)
     os.replace(tmp, path)
 
 
-def wait_for(path: Path, mode: str, poll: float, timeout: float, want: str = "") -> str | None:
+def wait_for(path: Path, mode: str, poll: float, timeout: float,
+             want: str = "") -> str | None:
     """Return the file's content once visible and starting with `want`, or None
     after `timeout` s."""
     deadline = time.monotonic() + timeout
@@ -62,13 +63,15 @@ def wait_for(path: Path, mode: str, poll: float, timeout: float, want: str = "")
     return None
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def main() -> None:
+    p = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     p.add_argument("dir", type=Path, help="shared directory; created, must be fresh per run")
     p.add_argument("--mode", choices=["listdir", "open", "replace"], default="listdir")
     p.add_argument("--rounds", type=int, default=30)
-    p.add_argument("--poll", type=float, default=0.02, help="seconds between checks (executor default)")
-    p.add_argument("--timeout", type=float, default=60.0, help="give up on one file after this many s")
+    p.add_argument("--poll", type=float, default=0.02,
+                   help="seconds between checks (executor default)")
+    p.add_argument("--timeout", type=float, default=60.0,
+                   help="give up on one file after this many s")
     p.add_argument("--rank", type=int, default=int(os.environ.get("SLURM_PROCID", "-1")))
     args = p.parse_args()
     if args.rank not in (0, 1):
@@ -108,7 +111,8 @@ def main():
         got = wait_for(theirs, how, args.poll, args.timeout, want)
         if got is None:
             stalled = i
-            print(f"rank {args.rank} round {i}: not seen within {args.timeout} s", file=sys.stderr, flush=True)
+            print(f"rank {args.rank} round {i}: not seen within {args.timeout} s",
+                  file=sys.stderr, flush=True)
             break
         waits.append(time.perf_counter() - start)
         # progress, in case the job's time cap kills us before the summary

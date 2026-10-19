@@ -27,6 +27,7 @@ def new_epoch() -> str:
 
 
 def write_atomic(path: Path, data: bytes) -> None:
+    """Write `data` to `path` via a dot-prefixed temporary file and a rename."""
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     with open(tmp, "wb") as f:
         f.write(data)
@@ -36,6 +37,7 @@ def write_atomic(path: Path, data: bytes) -> None:
 
 
 def read_current(spool: Path) -> str | None:
+    """The live epoch's name; None before an executor took the spool."""
     try:
         return (spool / CURRENT).read_text().strip()
     except FileNotFoundError:
@@ -43,14 +45,17 @@ def read_current(spool: Path) -> str | None:
 
 
 def is_current(epoch_dir: Path) -> bool:
+    """Whether `epoch_dir` is the live epoch of its spool."""
     return read_current(epoch_dir.parent) == epoch_dir.name
 
 
-def dump(*objects) -> bytes:
+def dump(*objects: object) -> bytes:
+    """The objects pickled one after the other, to read with pickle.load in turn."""
     return b"".join(pickle.dumps(o, protocol=pickle.HIGHEST_PROTOCOL) for o in objects)
 
 
 def result_name(tid: str, instance: str) -> str:
+    """`<tid>.<instance>.pkl`, a result's file name in out/."""
     return f"{tid}.{instance}.pkl"
 
 

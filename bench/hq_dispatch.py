@@ -29,32 +29,36 @@ import statistics
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
-from hyperqueue import Job
+from hyperqueue import Client, Job
 from hyperqueue.cluster import LocalCluster, WorkerConfig
 from hyperqueue.task.function import PythonEnv
 
 
-def noop(marker):
+def noop(marker: str) -> None:
     Path(marker).touch()
 
 
-def infretis_init(rundir, inp, marker):
+def infretis_init(rundir: str, inp: str, marker: str) -> None:
     # Mirrors bench/cold_start.py: infretis.setup first (import-order bug).
     import importlib.util  # noqa: F401
     os.chdir(rundir)
-    from infretis.setup import setup_config
     from infretis.classes.engines.factory import create_engines
     from infretis.classes.orderparameter import create_orderparameters
+    from infretis.setup import setup_config
 
     config = setup_config(inp)
+    assert config is not None, f"infretis refused {inp}"
     engines, _ = create_engines(config)
-    create_orderparameters(engines, config)
+    create_orderparameters(engines, config)  # pyright: ignore[reportArgumentType]
     Path(marker).touch()
 
 
-def round_trips(client, make_job, repeat, scratch):
+def round_trips(client: Client, make_job: Callable[[str], Job], repeat: int,
+                scratch: str) -> list[float]:
     times = []
     for i in range(repeat):
         marker = Path(scratch) / f"done-{time.monotonic_ns()}-{i}"
@@ -69,7 +73,7 @@ def round_trips(client, make_job, repeat, scratch):
     return times
 
 
-def stats(times):
+def stats(times: list[float]) -> dict[str, Any]:
     s = sorted(times)
     return {
         "n": len(s),
@@ -81,8 +85,8 @@ def stats(times):
     }
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def main() -> None:
+    p = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     p.add_argument("--rundir", type=Path, required=True)
     p.add_argument("--repeat", type=int, default=20)
     p.add_argument("--cores", type=int, default=1)
@@ -94,24 +98,24 @@ def main():
     with tempfile.TemporaryDirectory(prefix="hq-dispatch-") as scratch:
         server_dir = os.path.join(scratch, "server")
         # server_dir must be a str: the FFI rejects pathlib.Path.
-        with LocalCluster(server_dir=server_dir,
+        with LocalCluster(server_dir=server_dir,  # pyright: ignore[reportArgumentType]
                           worker_config=WorkerConfig(cores=args.cores)) as cluster:
             client = cluster.client(python_env=PythonEnv(python_bin=sys.executable))
             # Tasks run in the scratch dir and discard stdout/stderr, so
             # nothing lands in the current directory.
             common = {"cwd": scratch, "stdout": None, "stderr": None}
 
-            def program_job(marker):
+            def program_job(marker: str) -> Job:
                 job = Job()
                 job.program(["sh", "-c", f'true && touch "{marker}"'], **common)
                 return job
 
-            def function_job(marker):
+            def function_job(marker: str) -> Job:
                 job = Job()
                 job.function(noop, args=(marker,), **common)
                 return job
 
-            def infretis_job(marker):
+            def infretis_job(marker: str) -> Job:
                 job = Job()
                 job.function(infretis_init, args=(str(rundir), inp, marker), **common)
                 return job

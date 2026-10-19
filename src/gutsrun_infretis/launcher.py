@@ -57,6 +57,7 @@ commit a42e039; see PROVENANCE.md), which carries this licence:
 """
 
 import argparse
+import asyncio
 import concurrent.futures
 import hashlib
 import inspect
@@ -68,18 +69,23 @@ import shutil
 import signal
 import sys
 import time
+from collections.abc import Callable
+from concurrent.futures import Future
 from importlib.metadata import distribution
 from pathlib import Path
+from types import FrameType
+from typing import Any
 
 import tomli
 import tomli_w
+from infretis.asyncrunner import future_list
+from infretis.classes.repex import REPEX_state
+from infretis.scheduler import scheduler
+from infretis.setup import setup_config
 
 import gutsrun_infretis.worker  # noqa: F401  (imports infretis.setup first)
 from gutsrun import TaskExecutor
-from infretis.asyncrunner import future_list
-from infretis.classes.repex import REPEX_state
-from infretis.setup import setup_config
-from infretis.scheduler import scheduler
+from gutsrun.backends import Backend
 
 TESTED_COMMIT = "a42e039ba49eaf3c2b4021d6298c15e55f389735"
 # sha256 (first 16 hex) of inspect.getsource() at TESTED_COMMIT. The launcher
@@ -108,7 +114,7 @@ class Stop(BaseException):
 class InfretisExecutor(TaskExecutor):
     """Wraps each call in `worker.run_move` (per-pin log, import order)."""
 
-    def submit(self, fn, /, *args, **kwargs):
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
         if args or kwargs:
             raise TypeError("infretis submits partial(run_md, md_item) only")
         return super().submit(gutsrun_infretis.worker.run_move, fn)
@@ -117,8 +123,13 @@ class InfretisExecutor(TaskExecutor):
 EXECUTORS: list[InfretisExecutor] = []
 
 
-def make_factory(make_backend, spool_dir, resource_dict, timings_path=None):
-    def factory(max_workers=None, initializer=None, initargs=(), mp_context=None):
+def make_factory(make_backend: Callable[[int | None], Backend], spool_dir: str,
+                 resource_dict: dict[str, Any],
+                 timings_path: str | None = None) -> Callable[..., InfretisExecutor]:
+    """A stand-in for ProcessPoolExecutor that returns an InfretisExecutor."""
+
+    def factory(max_workers: int | None = None, initializer: object = None,
+                initargs: tuple[Any, ...] = (), mp_context: object = None) -> InfretisExecutor:
         # infretis passes (worker_initializer, (counter, config)); keep the config.
         config = initargs[1]
         ex = InfretisExecutor(
@@ -134,7 +145,8 @@ def make_factory(make_backend, spool_dir, resource_dict, timings_path=None):
 # --- patches ----------------------------------------------------------------------
 
 
-def infretis_commit():
+def infretis_commit() -> str | None:
+    """The installed infretis's git commit, if pip recorded one."""
     try:
         info = json.loads(distribution("infretis").read_text("direct_url.json") or "{}")
     except Exception:
@@ -157,7 +169,9 @@ def changed_sources() -> list[str]:
             != KNOWN_SOURCES[name]]
 
 
-def check_infretis(allow_other: bool):
+def check_infretis(allow_other: bool) -> None:
+    """Exit if a function the launcher relies on differs from the tested
+    one, unless `allow_other`."""
     commit = infretis_commit()
     changed = changed_sources()
     log.info("infretis commit %s (tested: %s); changed functions: %s",
@@ -169,7 +183,7 @@ def check_infretis(allow_other: bool):
                  "them, or pass --allow-other-infretis to run anyway.")
 
 
-def write_toml_atomic(self):
+def write_toml_atomic(self: REPEX_state) -> None:
     """REPEX_state.write_toml at a42e039 (repex.py:764), with temp + rename."""
     self.config["current"]["active"] = self.live_paths()
     locked_ep = []
@@ -188,7 +202,8 @@ def write_toml_atomic(self):
     os.replace("./.restart.toml.tmp", "./restart.toml")
 
 
-def as_completed_sleeping(self, interval=0.005):
+def as_completed_sleeping(self: future_list,
+                          interval: float = 0.005) -> asyncio.Future[Any] | None:
     """future_list.as_completed (asyncrunner.py:243) without the busy spin."""
     while self._futures:
         for fut in list(self._futures):
@@ -202,17 +217,18 @@ def as_completed_sleeping(self, interval=0.005):
 class GracefulStop:
     """Defers SIGTERM/SIGINT while treat_output runs, then stops."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.in_treat = False
-        self.requested = None
+        self.requested: str | None = None
 
-    def install(self):
+    def install(self) -> None:
+        """Wrap REPEX_state.treat_output and take over SIGTERM and SIGINT."""
         original = REPEX_state.treat_output
         guard = self
 
         hold = float(os.environ.get(HOLD_ENV, "0"))
 
-        def treat_output(state, md_items):
+        def treat_output(state: REPEX_state, md_items: dict[str, Any]) -> Any:
             guard.in_treat = True
             if hold:
                 Path("treat_output.entered").touch()
@@ -224,11 +240,11 @@ class GracefulStop:
                 if guard.requested is not None:
                     raise Stop(guard.requested)
 
-        REPEX_state.treat_output = treat_output
+        REPEX_state.treat_output = treat_output  # pyright: ignore[reportAttributeAccessIssue]
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, self.handle)
 
-    def handle(self, signum, frame):
+    def handle(self, signum: int, frame: FrameType | None) -> None:
         self.requested = signal.Signals(signum).name
         log.warning("%s received; stopping%s", self.requested,
                     " after treat_output" if self.in_treat else "")
@@ -253,7 +269,7 @@ def strip_pinning(wmdrun: list, cores: int) -> list:
     return out
 
 
-def check_restart_file(inp: str):
+def check_restart_file(inp: str) -> None:
     """Back up restart.toml and make sure it parses: a truncated file would
     otherwise only show when infretis fails to restart."""
     path = Path("restart.toml")
@@ -272,8 +288,8 @@ def check_restart_file(inp: str):
 # --- main -------------------------------------------------------------------------
 
 
-def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     p.add_argument("-i", "--input", required=True)
     p.add_argument("--backend", choices=["local", "hq"], default="local")
     p.add_argument("--hq-server-dir", default=os.environ.get("HQ_SERVER_DIR"))
@@ -293,16 +309,17 @@ def main(argv=None):
     check_infretis(args.allow_other_infretis)
     check_restart_file(args.input)
 
-    if args.backend == "local":
+    def local_backend(max_workers: int | None) -> Backend:
         from gutsrun.backends.local import LocalBackend
 
-        def make_backend(max_workers):
-            return LocalBackend(max_workers=max_workers)
-    else:
+        return LocalBackend(max_workers=max_workers)
+
+    def hq_backend(max_workers: int | None) -> Backend:
         from gutsrun.backends.hq import HQBackend
 
-        def make_backend(max_workers):
-            return HQBackend(args.hq_server_dir, crash_limit=args.crash_limit)
+        return HQBackend(args.hq_server_dir, crash_limit=args.crash_limit)
+
+    make_backend = local_backend if args.backend == "local" else hq_backend
 
     resources = {"cores": args.cores_per_task, "cwd": os.getcwd()}
     concurrent.futures.ProcessPoolExecutor = make_factory(

@@ -33,9 +33,11 @@ commit a42e039; see PROVENANCE.md), which carries this licence:
 """
 
 import logging
+from functools import partial
+from typing import Any
 
-import infretis.setup  # noqa: F401  (must come first, see above)
 import infretis.core.tis
+import infretis.setup  # noqa: F401  (must come first, see above)
 from infretis.classes.engines.factory import create_engines
 from infretis.classes.formatter import get_log_formatter
 from infretis.classes.orderparameter import create_orderparameters
@@ -43,7 +45,7 @@ from infretis.classes.orderparameter import create_orderparameters
 logger = logging.getLogger("")
 
 
-def init(config):
+def init(config: dict[str, Any]) -> None:
     """Replaces infretis's `worker_initializer(counter, config)`.
 
     Same engine and order parameter set-up, without the shared counter
@@ -52,11 +54,13 @@ def init(config):
     """
     if "simulation" in config:
         engines, _ = create_engines(config)
-        create_orderparameters(engines, config)
+        # infretis annotates `engines` as dict[str, list]; it takes what
+        # create_engines returns.
+        create_orderparameters(engines, config)  # pyright: ignore[reportArgumentType]
         infretis.core.tis.ENGINES = engines
 
 
-def run_move(call):
+def run_move(call: "partial[Any]") -> Any:
     """Run `call` (infretis's `partial(run_md, md_item)`), logging to
     `worker{pin}.log`, the same per-slot name as the scratch dir `worker{pin}/`."""
     pin = call.args[0]["pin"]
