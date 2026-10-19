@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -147,6 +148,39 @@ def test_sigterm_inside_treat_output(tmp_path):
     proc = launch(rd, "-i", "restart.toml")
     out, _ = proc.communicate(timeout=600)
     assert proc.returncode == EXIT_DONE, out
+    nums = path_numbers(rd)
+    assert len(nums) == len(set(nums)), "duplicate path numbers after restart"
+
+
+def test_stop_before_the_first_move_leaves_restart_toml_alone(tmp_path):
+    """A resumed link stopped while it starts up (`stop` right after a link
+    starts): infretis writes restart.toml only at the end of treat_output,
+    so the file stays as the last link left it, and the next link continues
+    from it. Not refused: infretis refuses only when cstep equals
+    restarted_from, and a written file always has cstep > restarted_from."""
+    import tomli
+
+    rd = tmp_path / "run"
+    prepare("2d_potential", rd, workers=2, steps=20)
+    proc = launch(rd, "-i", "infretis.toml")
+    wait_for(lambda: (rd / "restart.toml").exists(), timeout=120, what="restart.toml")
+    proc.send_signal(signal.SIGTERM)
+    out, _ = proc.communicate(timeout=120)
+    assert proc.returncode == EXIT_STOPPED, out
+    left = (rd / "restart.toml").read_bytes()
+
+    proc = launch(rd, "-i", "restart.toml")
+    time.sleep(0.2)  # importing: with or without its handler, no move has run
+    proc.send_signal(signal.SIGTERM)
+    out, _ = proc.communicate(timeout=120)
+    assert proc.returncode in (EXIT_STOPPED, -signal.SIGTERM), out
+    assert (rd / "restart.toml").read_bytes() == left
+
+    proc = launch(rd, "-i", "restart.toml")
+    out, _ = proc.communicate(timeout=600)
+    assert proc.returncode == EXIT_DONE, out
+    current = tomli.loads((rd / "restart.toml").read_text())["current"]
+    assert current["restarted_from"] == tomli.loads(left.decode())["current"]["cstep"]
     nums = path_numbers(rd)
     assert len(nums) == len(set(nums)), "duplicate path numbers after restart"
 
