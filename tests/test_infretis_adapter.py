@@ -153,6 +153,23 @@ def test_sigterm_inside_treat_output(tmp_path):
     assert len(nums) == len(set(nums)), "duplicate path numbers after restart"
 
 
+@pytest.mark.parametrize("gap", [0.001, 0.03])
+def test_second_sigterm_while_stopping(tmp_path, gap):
+    """`scancel` signals every process of the job: the launcher gets SIGTERM
+    from Slurm and again from the link. It stops once, with EXIT_STOPPED,
+    whether the second arrives while it stops (`gap` 0.001) or while
+    Python shuts down (0.03)."""
+    rd = tmp_path / "run"
+    prepare("2d_potential", rd, workers=2, steps=400)
+    proc = launch(rd, "-i", "infretis.toml")
+    wait_for(lambda: (rd / "restart.toml").exists(), timeout=120, what="restart.toml")
+    proc.send_signal(signal.SIGTERM)
+    time.sleep(gap)
+    proc.send_signal(signal.SIGTERM)
+    out, _ = proc.communicate(timeout=120)
+    assert proc.returncode == EXIT_STOPPED, out
+
+
 def test_stop_before_the_first_move_leaves_restart_toml_alone(tmp_path):
     """A resumed link stopped while it starts up (`stop` right after a link
     starts): infretis writes restart.toml only at the end of treat_output,

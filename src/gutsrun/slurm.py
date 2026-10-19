@@ -712,8 +712,7 @@ class Forwarder:
               env: dict[str, str] | None = None) -> subprocess.Popen[bytes]:
         """Start the workload. A signal that arrives while it starts, after
         `received` was last checked but before `child` is set, is passed
-        on here; only once, since the launcher treats a second SIGTERM as a
-        new request."""
+        on here; only once: one request, one signal."""
         child = self.child = subprocess.Popen(argv, cwd=cwd, env=env)
         if self.received is not None and not self.forwarded:
             self.forwarded = True

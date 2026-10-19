@@ -248,6 +248,11 @@ class GracefulStop:
 
     def handle(self, signum: int, frame: FrameType | None) -> None:
         self.requested = signal.Signals(signum).name
+        # One request is enough. `scancel` signals every process of the job,
+        # so the link passes on a second copy; ignored to the exit, also
+        # while Python shuts down (it restores default handlers, not SIG_IGN).
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, signal.SIG_IGN)
         log.warning("%s received; stopping%s", self.requested,
                     " after treat_output" if self.in_treat else "")
         if not self.in_treat:
