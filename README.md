@@ -1,177 +1,120 @@
 # infretis on HPC via HyperQueue
 
-GUTS Fast Track: make [infretis](https://github.com/infretis/infretis)
-usable on HPC clusters, with multi-node runs that survive walltime limits.
-[HyperQueue](https://github.com/It4innovations/hyperqueue) (HQ) is the Task
-Scheduler. Development on DAS-6; Snellius is the first real target, LUMI and
-JSC later.
+Run an [infretis](https://github.com/infretis/infretis) simulation on a
+Slurm cluster for longer than one job's walltime. `gutsrun-infretis` runs it
+as a chain of Slurm jobs ("links"): each link runs infretis until shortly
+before its walltime, stops it cleanly, and the next link continues from
+`restart.toml`. Inside each job, [HyperQueue](https://github.com/It4innovations/hyperqueue)
+(HQ) runs each Monte Carlo move as its own task.
 
-Plan, decisions and results live in the vault (`~/code/vault`, project
-`guts`):
+You keep your infretis run directory as it is (`infretis.toml`, `load/`,
+the engine's inputs); the chain runs in it.
 
-- plan: `projects/guts/plans/2026-10-15-fast-track-infretis-on-hpc-via-hyperqueue.md`
-- architecture: `notes/2026-10-15-guts-architecture-diagram.md`, and
-  `~/code/GUTS/GUTSnotes/design.md`
+Part of the GUTS Fast Track. For how it is built, tested and measured, see
+[DEVELOPMENT.md](DEVELOPMENT.md).
 
-## Components
-
-How this repo maps onto the GUTSnotes design:
-
-| Component | Here |
-|---|---|
-| Trajectory Sampler + Result Manager | infretis's MC loop, unchanged |
-| Session | the infretis run directory (`load/`, `restart.toml`, `infretis_data.txt`) |
-| Task Scheduler | HQ server |
-| Process Manager | HQ workers |
-| Resource Manager | the self-chaining `sbatch` script (step 7) |
-| Job Submitter | site files + `sbatch` |
+## How a run goes
 
 ```
-Slurm job ──▶ HQ server + HQ workers ──▶ one HQ task per MC move
-                    ▲
-infretis MC loop ── HQExecutor (replaces ProcessPoolExecutor)
+login node                     compute node, one Slurm job per link
+----------                     ------------------------------------
+gutsrun-infretis submit ─────▶ link 1  submits link 2 (starts after link 1 ends)
+                                       unpacks the venv to node-local disk
+                                       starts an HQ server and worker
+                                       runs infretis from infretis.toml
+                                       ... SIGTERM 90 s before the walltime:
+                                       infretis stops once restart.toml is
+                                       consistent; unfinished moves are redone
+                               link 2  continues from restart.toml, submits link 3
+                                 ...
+                               link n  the run reaches its steps: cancels link n+1
 ```
 
-The HPC part is generic and knows nothing about MD; it is meant to grow into
-the shared GUTS HPC packages. Only the adapter knows about infretis.
+A link that fails, or finds `restart.toml` unreadable, cancels the next
+one, so a broken run does not burn through its links.
 
-## Layout
+## Quick start
 
-```
-flake.nix               dev shell: hq 0.26.2, Python 3.12, GROMACS, LAMMPS
-requirements.txt        direct pins (infretis, inftools, hyperqueue client)
-requirements-lock.txt   exact versions, installed by setup-venv.sh
-scripts/get-hq.sh       pinned hq binary into ./bin, for clusters without Nix
-scripts/setup-venv.sh   .venv from the lock file
-scripts/sync.sh         rsync the repo to a login node, pull runs/<site>/ back
-scripts/wait-jobs.sh    poll a login node's squeue until jobs finish, optionally pull
-scripts/das6/           DAS-6 probes: login node (read-only), one-node and two-node jobs
-sites/das6.toml         DAS-6 site knobs for chained Slurm jobs (gutsrun.slurm)
-ASSUMPTIONS.md          version pins and cluster assumptions
-PROVENANCE.md           where each file comes from, and under which terms
-bench/bare_run.py       run bare infretis on an example, record run.json
-bench/move_times.py     per-move time statistics from sim.log
-bench/cold_start.py     cold start of a fresh infretis worker process (N at once)
-bench/fs_latency.py     cross-node file visibility on a shared FS (ping-pong)
-bench/hq_dispatch.py    HQ per-task round trip (program vs Python function task)
-bench/executor_roundtrip.py  round trip of a trivial call through gutsrun
-bench/step5.sh          each case through bare / gutsrun local / gutsrun HQ, back to back
-bench/timings_summary.py  per-phase medians from gutsrun-timings.jsonl
-examples/               prepared infentory cases (examples/README.md)
-src/gutsrun/            generic: TaskExecutor + backends; slurm.py chains Slurm jobs (no MD imports)
-src/gutsrun_infretis/   infretis adapter, launcher, chain workload (the only infretis-aware code)
-tests/                  pytest suite (gate C; adapter tests need infretis)
-```
-
-`runs/<site>/` holds outputs and is not tracked.
-
-## gutsrun
-
-`gutsrun.TaskExecutor` is a `concurrent.futures.Executor`: each `submit`
-runs as one backend task, a fresh `python -m gutsrun.task` process.
-
-```python
-from gutsrun import TaskExecutor
-from gutsrun.backends.hq import HQBackend        # or backends.local.LocalBackend
-
-ex = TaskExecutor(HQBackend(server_dir), "runs/x/spool",
-                  initializer=init, initargs=(cfg,),        # runs before every call
-                  resource_dict={"cores": 2})               # default per call
-fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})
-```
-
-- **Spool directory**, one subdirectory per executor instance (the
-  *epoch*): `in/` holds the pickled calls, `out/` the results
-  (`<tid>.<instance>.pkl`, temp + rename), `log/` stdout/stderr. `CURRENT`
-  names the live epoch. A new executor takes over the spool and deletes
-  older epochs. Tasks of an older epoch neither start nor publish.
-- **Completion** from result files (listed every 20 ms). Failures from the
-  backend every 2 s (HQ: one batched `get_failed_tasks` call). The first
-  result for a task wins; later ones are deleted. Files of finished
-  tasks are deleted; failed tasks keep their logs.
-- **HQ tasks are `program()` tasks**, not Python function tasks. They
-  carry only two paths (payload rule), and need no HQ Python environment.
-  HQ reruns a task after a worker crash (`crash_limit`, default 2). The
-  rerun gets a new instance number.
-- **Like `ProcessPoolExecutor` with spawn:** calls and results must pickle
-  by reference; the caller's `sys.path` is sent along. Exceptions arrive
-  with the remote traceback as `__cause__`. Unlike it, the initializer
-  runs before every call.
-- Both backends set `OMP_NUM_THREADS` to the task's cores (HQ does so for
-  every task).
-
-## Running infretis through gutsrun
-
-In an infretis run directory, instead of `infretisrun -i infretis.toml`:
+Once per cluster, on its login node, in a copy of this repository:
 
 ```bash
-PYTHONPATH=<repo>/src python -m gutsrun_infretis.launcher -i infretis.toml --backend local
-HQ_SERVER_DIR=... PYTHONPATH=<repo>/src python -m gutsrun_infretis.launcher \
-    -i restart.toml --backend hq --cores-per-task 2
+scripts/setup-venv.sh       # .venv with infretis and gutsrun-infretis (see the script for clusters)
+scripts/get-hq.sh           # the hq binary, into bin/
 ```
 
-or `bench/bare_run.py ... --runner gutsrun [--backend hq]`. The launcher
-swaps in `TaskExecutor` (infretis unforked) and fixes, for this run only:
-atomic `restart.toml` + backup at start, graceful SIGTERM/SIGINT (waits
-out `treat_output`), no busy spin in the parent (92 % → 2 % of a core),
-`wmdrun` pinning flags stripped under HQ, `-ntomp` checked against
-`--cores-per-task`. At start it checks the source of the four infretis
-functions it copies or relies on against the tested commit (`a42e039`);
-other infretis versions run if those are unchanged, otherwise it stops
-(`--allow-other-infretis` overrides). Exit codes: 0 done, 3 stopped by a
-signal, 4 infretis refused to start. Logs: `gutsrun.log`; moves log to
-`worker{pin}.log` as before; per-move timings go to
-`gutsrun-timings.jsonl` (`bench/timings_summary.py` summarises them).
+The cluster needs a site file, `sites/<site>.toml` (DAS-6: `das6`; see
+[Adding a cluster](#adding-a-cluster)).
 
-## Tests
+Then, for each run, in the run directory on a file system the compute nodes
+share:
 
 ```bash
-nix develop --command .venv/bin/python -m pytest          # all but slow (~40 s)
-nix develop --command .venv/bin/python -m pytest -m slow  # LAMMPS exact check (~1 min)
-.venv/bin/python -m pytest -m "not hq"                    # without the dev shell: gutsrun only
+cd /path/to/my-run
+~/infretis_hyperqueue/.venv/bin/gutsrun-infretis submit --site das6 --links 20
+gutsrun-infretis status            # where the run is, and each link's job
+gutsrun-infretis status --follow   # the same, again on every change, until the chain ends
+gutsrun-infretis stop              # stop the chain; restart.toml stays valid
 ```
 
-The HQ tests start `hq server` and `hq worker` processes, which need TCP
-on localhost. They cannot run inside Claude Code's sandbox.
+(The examples call it by its path once; with `.venv/bin` on your `PATH`,
+`gutsrun-infretis` is enough.)
 
-## Getting started (laptop)
+## Settings
 
-```bash
-nix develop
-scripts/setup-venv.sh
-.venv/bin/python -c 'import infretis, hyperqueue'
+Instead of options, a run directory can hold its settings in
+`gutsrun.toml`; options on the command line override it:
+
+```toml
+site = "das6"
+links = 20             # a cap on the whole chain (default 10)
+time = "00:14:00"      # walltime per link (default: just under the site's daytime limit)
+margin = 90            # seconds before the walltime that SIGTERM comes (default 90)
+cores_per_task = 1     # cores per infretis move, i.e. per MD engine call (default 1)
+name = "water-run-3"   # label in the Slurm job names (default: the directory's name)
 ```
+
+The simulation itself (steps, workers, engines) stays in `infretis.toml`.
+To label a run beyond `name`, use version control: a commit message or a
+README in the run directory.
+
+## What a chain leaves behind
+
+infretis's own outputs, as without gutsrun, plus:
+
+- `.gutsrun/link<n>-<job>.out`: each link's log, including infretis's
+  output. The first place to look when a link failed.
+- `.gutsrun/links.jsonl`: one line per event (submitted, started, ended,
+  with the result and the step reached). `status` reads it.
+- `.gutsrun/chain.json`: the chain's settings.
+- `gutsrun.log`, `gutsrun-timings.jsonl`: the launcher's log and per-move
+  timings.
+- `restart.toml.bak.<step>`: a copy of `restart.toml` at each link's start.
+
+## Running longer, starting again
+
+The run is done when `restart.toml`'s `current.cstep` reaches
+`simulation.steps`. To run further, raise `steps` in `restart.toml` and
+`submit` again. `submit` also starts a new chain after one ran out of
+links, or was stopped; it refuses while a chain's jobs are still queued or
+running in the directory.
+
+## Adding a cluster
+
+Copy `sites/template.toml` to `sites/<name>.toml` and fill it in: the
+template explains every key and what each value means. Two things that
+differ between clusters:
+
+- **Policy limits.** Some clusters limit the walltime by policy rather
+  than in Slurm, e.g. DAS-6's 15 minutes during the day.
+  `max_walltime_day` holds such a limit; `submit` then refuses a longer
+  `time` unless given `--night`. Where Slurm itself enforces the limits,
+  leave it out.
+- **Where Python starts from.** With `local_venv = true`, each job unpacks
+  the venv to node-local disk, which helps when the venv is on NFS.
 
 ## DAS-6
 
 The login node (`fs0`) is reachable only from a university network or
-through eduVPN. Code goes there with `scripts/sync.sh <host> push`, and
-`runs/das6/` comes back with `pull`.
-
-A run longer than one job's walltime is a chain of Slurm jobs ("links"),
-each continuing from `restart.toml` and submitting the next.
-`gutsrun.slurm` holds the generic part, `gutsrun_infretis.chain` the
-infretis workload and the command; both use only the standard library and
-run with the site's system Python. On `fs0`, from the repo root:
-
-```bash
-PYTHONPATH=src python3.12 -m gutsrun_infretis.chain 2d gutsrun --steps 1000 --time 00:05:00
-PYTHONPATH=src python3.12 -m gutsrun.slurm pack     # repack bin/venv.tar after changing .venv
-```
-
-It prints link 1's job id. Options and outputs: the two modules' docstrings.
-
-## Status
-
-| Step | | State |
-|---|---|---|
-| 1 | Repo setup | done |
-| 2 | Bare infretis baseline + MD move times | done on the laptop (GROMACS at real size still open) |
-| 3 | `gutsrun` + test suite (gate C) | done on the laptop; gate C passed (24/24) |
-| 4 | infretis adapter + launcher | done on the laptop; exact check passes (LAMMPS) |
-| 5 | HQ backend, local (gate A, D1) | done on the laptop; gate A passed; D1 numbers in the vault |
-| 6 | DAS-6 preflight | done, except the MD engines (they come the researchers' way) |
-| 7 | DAS-6, one node (gate B) | gate B partial: 2d_potential chains with both runners; the real MD case waits on the engines |
-| 8 | DAS-6, multi-node + drills | |
-| 9 | Validation + metrics | |
-| 10 | Snellius port (gate D) | |
+through eduVPN. Daytime jobs (08:00–20:00) may run 15 minutes at most;
+`submit` picks 14 minutes unless told otherwise. `/home` has a 5 GB quota,
+so put run directories with MD output in `/var/scratch/$USER`.

@@ -1,8 +1,18 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "gutsrun"
 version = "0.0.1"
 description = "Run Python calls as cluster tasks behind a standard Executor (GUTS Fast Track)"
 requires-python = ">=3.12"
+
+[project.scripts]
+gutsrun-infretis = "gutsrun_infretis.chain:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]

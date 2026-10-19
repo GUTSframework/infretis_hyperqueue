@@ -15,8 +15,10 @@ For GROMACS examples, `--wmdrun` is a template expanded once per worker with
     --wmdrun "gmx mdrun -ntomp 2 -ntmpi 1 -pin on -pinoffset {offset} -pinstride 1" \
     --cores-per-worker 2
 
-To restart a run in place (later chain links), pass `--restart`: it runs
-`infretisrun -i restart.toml` in the existing directory instead of copying.
+To restart a run in place, pass `--restart`: it runs `infretisrun -i
+restart.toml` in the existing directory instead of copying. `--in-place`
+runs in an existing, prepared directory from restart.toml if there is one,
+else from infretis.toml (the links of bench/chain.py).
 
 infretis runs as `python -c` with this interpreter, not through the
 `infretisrun` script, whose shebang names the venv it was installed in (a
@@ -72,6 +74,11 @@ def parse_args():
     )
     p.add_argument(
         "--restart", action="store_true", help="continue from restart.toml in RUNDIR"
+    )
+    p.add_argument(
+        "--in-place",
+        action="store_true",
+        help="run in the prepared RUNDIR: restart.toml if there is one, else infretis.toml",
     )
     p.add_argument("--runner", choices=["bare", "gutsrun"], default="bare")
     p.add_argument("--backend", choices=["local", "hq"], default="local")
@@ -135,8 +142,9 @@ def git_head(path):
 
 def main():
     args = parse_args()
-    if args.restart:
-        inp = "restart.toml"
+    if args.restart or args.in_place:
+        restart = (args.rundir / "restart.toml").exists()
+        inp = "restart.toml" if restart or args.restart else "infretis.toml"
         if not (args.rundir / inp).exists():
             sys.exit(f"no {inp} in {args.rundir}")
     else:

@@ -1,33 +1,19 @@
-# DAS-6, VU cluster (login node fs0): what gutsrun.slurm needs to know about
-# the cluster, and choices that hold for every project run on it. Project
-# paths come from the project root, so nothing here is per project or per
-# user. The facts behind these values: ASSUMPTIONS.md.
+# DAS-6, VU cluster (login node fs0). What each key means, and the other
+# values it takes: sites/template.toml. The facts behind these values:
+# ASSUMPTIONS.md.
 
 [slurm]
-# The partition to submit to: Slurm's name for a queue, a group of nodes with
-# its own rules. defq is DAS-6's default partition, 32 nodes.
+# defq is DAS-6's default partition: 32 CPU nodes.
 partition = "defq"
-# The longest walltime per job during the day: DAS-6 policy for 08:00-20:00
-# (Slurm itself sets no limit). Longer jobs need --night.
-max_walltime_day = "00:15:00"
-# Physical cores per node, used as the HQ worker's --cpus. Slurm reports 48
-# CPUs: 24 cores with two hardware threads each.
+# Slurm reports 48 CPUs: 24 cores with two hardware threads each.
 cores_per_node = 24
-# Whole nodes for each job: no other job shares them. The HQ worker uses every
-# core, and timings stay free of other jobs' load.
 exclusive = true
+# DAS-6 policy for 08:00-20:00; Slurm itself sets no limit.
+max_walltime_day = "00:15:00"
 # (Never pass --mem on DAS-6: Slurm has no memory configured.)
 
-[python]
-# The cluster's own Python 3.12. The chain itself runs on it (standard library
-# only), and scripts/setup-venv.sh builds the venv from it.
-interpreter = "/usr/bin/python3.12"
-
 [node]
-# Node-local disk that jobs may write to.
 local_disk = "/local"
-# Each job runs a copy of the venv unpacked from bin/venv.tar to local_disk,
-# instead of the venv on /home (NFS). Measured: 0.15-0.3 s faster per task
-# start, for 2 s of unpacking per job; it also spares the file server when
-# many nodes start Python at once.
+# The venv is on /home (NFS). Measured: 0.15-0.3 s faster per task start,
+# for 2 s of unpacking per job.
 local_venv = true

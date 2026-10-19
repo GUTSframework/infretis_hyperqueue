@@ -2,18 +2,23 @@
 squeue record their calls, and a counting workload (chain_workload.py)
 stands in for infretis. Links run as real processes, as in a job."""
 
+import dataclasses
 import getpass
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 import pytest
 
-from gutsrun.slurm import ChainError, Spec, seconds, start, venv_stale
+import gutsrun_infretis.chain as cli
+from gutsrun.slurm import (ChainError, Site, Spec, StateError, events, follow, load_spec,
+                           note, seconds, start, status, stop, venv_stale, walltime)
 from gutsrun_infretis.chain import InfretisRun
 from conftest import wait_for
 
@@ -22,12 +27,8 @@ REPO = Path(__file__).resolve().parent.parent
 SITE = """\
 [slurm]
 partition = "testq"
-max_walltime_day = "00:15:00"
 cores_per_node = 2
-exclusive = true
-
-[python]
-interpreter = "{python}"
+max_walltime_day = "00:15:00"
 
 [node]
 local_disk = "{local_disk}"
@@ -41,41 +42,64 @@ n=$(( $(grep -c '^sbatch' "$FAKE_LOG") + 1000 ))
 echo "$n"
 """
 FAKE_SCANCEL = '#!/usr/bin/env bash\necho "scancel $*" >> "$FAKE_LOG"\n'
-# Lists the job ids in $FAKE_SQUEUE; fails like an unreachable slurmctld without it.
-FAKE_SQUEUE = '#!/usr/bin/env bash\n[ -n "${FAKE_SQUEUE:-}" ] && echo "$FAKE_SQUEUE"\n'
+# Prints $FAKE_SQUEUE (lines of "<id> <state> <time> <reason>"); fails like an
+# unreachable slurmctld when it is unset.
+FAKE_SQUEUE = """\
+#!/usr/bin/env bash
+[ -n "${FAKE_SQUEUE+x}" ] || exit 1
+printf '%s\\n' "$FAKE_SQUEUE"
+"""
+FAKE_HQ = '#!/usr/bin/env bash\necho "hyperqueue v0.26.2"\n'
 
 
 class Project:
-    def __init__(self, root: Path, local_venv=False):
+    """A gutsrun checkout (sites/, .venv, fake Slurm commands) and a run directory."""
+
+    def __init__(self, root: Path, local_venv: bool = False):
         self.root = root
         self.local = root / "local"
         self.local.mkdir()
         (root / "sites").mkdir()
         (root / "sites" / "test.toml").write_text(SITE.format(
-            python=sys.executable, local_venv=str(local_venv).lower(), local_disk=self.local))
+            local_venv=str(local_venv).lower(), local_disk=self.local))
         (root / ".venv" / "bin").mkdir(parents=True)
         (root / ".venv" / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
         (root / ".venv" / "bin" / "python").symlink_to(sys.executable)
-        fakebin = root / "fakebin"
-        fakebin.mkdir()
+        self.fakebin = root / "fakebin"
+        self.fakebin.mkdir()
         for name, text in [("sbatch", FAKE_SBATCH), ("scancel", FAKE_SCANCEL),
                            ("squeue", FAKE_SQUEUE)]:
-            (fakebin / name).write_text(text)
-            (fakebin / name).chmod(0o755)
+            (self.fakebin / name).write_text(text)
+            (self.fakebin / name).chmod(0o755)
         self.log = root / "fake.log"
         self.log.touch()
+        self.rundir = root / "run"
+        self.rundir.mkdir()
         self.env = {**os.environ, "FAKE_LOG": str(self.log),
-                    "PATH": os.pathsep.join([str(fakebin), os.environ["PATH"]]),
-                    "PYTHONPATH": os.pathsep.join([str(REPO / "src"), str(REPO / "tests")])}
+                    "PATH": os.pathsep.join([str(self.fakebin), os.environ["PATH"]]),
+                    "PYTHONPATH": str(REPO / "src")}
+        self.env.pop("FAKE_SQUEUE", None)
 
-    def spec(self, name="r", links=2, **counter):
-        spec = Spec(root=str(self.root), site="test", name=name,
-                    workload="chain_workload:Counter", args=counter,
-                    time="00:05:00", links=links)
+    def use_fakes(self, monkeypatch: pytest.MonkeyPatch, squeue: str | None = None) -> None:
+        """Make the fake Slurm commands the ones this process calls."""
+        monkeypatch.setenv("PATH", self.env["PATH"])
+        monkeypatch.setenv("FAKE_LOG", str(self.log))
+        if squeue is None:
+            monkeypatch.delenv("FAKE_SQUEUE", raising=False)
+        else:
+            monkeypatch.setenv("FAKE_SQUEUE", squeue)
+
+    def make_spec(self, links: int = 2, **counter) -> Spec:
+        return Spec(rundir=str(self.rundir), site="test", name="r",
+                    workload="chain_workload:Counter", pythonpath=[str(REPO / "tests")],
+                    args=counter, time="00:05:00", links=links, root=str(self.root))
+
+    def spec(self, links: int = 2, **counter) -> Spec:
+        spec = self.make_spec(links, **counter)
         start(spec, submit_first=False)
         return spec
 
-    def link(self, spec, n, wait=True, **env):
+    def link(self, spec: Spec, n: int, wait: bool = True, **env):
         argv = [sys.executable, "-m", "gutsrun.slurm", "link", str(spec.path), str(n)]
         proc = subprocess.Popen(argv, cwd=self.root, env={**self.env, **env},
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -84,12 +108,12 @@ class Project:
         out, _ = proc.communicate(timeout=120)
         return proc.returncode, out
 
-    def calls(self, cmd):
+    def calls(self, cmd: str) -> list[str]:
         return [line for line in self.log.read_text().splitlines() if line.startswith(cmd)]
 
 
-def step(spec):
-    return json.loads((spec.rundir / "state.json").read_text())["step"]
+def step(spec: Spec) -> int:
+    return json.loads((Path(spec.rundir) / "state.json").read_text())["step"]
 
 
 @pytest.fixture
@@ -97,42 +121,90 @@ def project(tmp_path):
     return Project(tmp_path)
 
 
-@pytest.mark.parametrize("walltime, expected", [
+@pytest.mark.parametrize("text, expected", [
     ("15", 900), ("15:30", 930), ("00:14:00", 840), ("48:00:00", 172800),
     ("2-0", 172800), ("1-2:30", 95400), ("1-02:03:04", 93784)])
-def test_seconds_reads_slurm_walltimes(walltime, expected):
-    assert seconds(walltime) == expected
+def test_seconds_reads_slurm_walltimes(text, expected):
+    assert seconds(text) == expected
+    assert seconds(walltime(expected)) == expected
+
+
+# --- sites --------------------------------------------------------------------------
+
+
+def test_template_lists_every_site_key():
+    text = (REPO / "sites" / "template.toml").read_text()
+    # Optional keys are commented out with their example value.
+    data = tomllib.loads("\n".join(line.removeprefix("# ") if " = " in line else line
+                                   for line in text.splitlines()))
+    assert {table: set(keys) for table, keys in data.items()} == Site.KEYS
+    Site(REPO, "template")
+    Site(REPO, "das6")
+
+
+def test_site_refusals(project):
+    path = project.root / "sites" / "test.toml"
+    path.write_text(path.read_text() + "typo = 1\n")
+    with pytest.raises(ChainError, match="unknown in \\[node\\]: typo"):
+        Site(project.root, "test")
+    path.write_text('[slurm]\npartition = "q"\ncores_per_node = 2\nexclusive = false\n')
+    with pytest.raises(ChainError, match="not supported"):
+        Site(project.root, "test")
+    with pytest.raises(ChainError, match="known: test"):
+        Site(project.root, "nosuch")
 
 
 # --- starting -----------------------------------------------------------------------
 
 
 def test_start_submits_link_1_with_site_options(project, monkeypatch):
-    spec = Spec(root=str(project.root), site="test", name="r",
-                workload="chain_workload:Counter", time="00:05:00")
-    monkeypatch.setenv("PATH", project.env["PATH"])
-    monkeypatch.setenv("FAKE_LOG", str(project.log))
+    project.use_fakes(monkeypatch)
+    spec = project.make_spec()
     assert start(spec) == "1001"
     [call] = project.calls("sbatch")
     for part in ["--partition=testq", "--exclusive", "--nodes=1", "--time=00:05:00",
-                 "--signal=B:TERM@90", f"--chdir={project.root}", "-m gutsrun.slurm link",
-                 f"{spec.path} 1", f"{sys.executable}"]:
+                 "--signal=B:TERM@90", f"--chdir={project.rundir}",
+                 f"--output={project.rundir}/.gutsrun/link1-%j.out",
+                 f"exec {project.root}/.venv/bin/python -m gutsrun.slurm link",
+                 f"{spec.path} 1"]:
         assert part in call
     assert "--dependency" not in call
-    assert Spec.load(spec.path) == spec
+    assert load_spec(project.rundir) == spec
+    assert [e["event"] for e in events(spec)] == ["chain", "submitted"]
 
 
 def test_start_refusals(project):
-    def spec(**kw):
-        return Spec(**{"root": str(project.root), "site": "test", "name": "r",
-                       "workload": "chain_workload:Counter", **kw})
+    def spec(**changes) -> Spec:
+        return dataclasses.replace(project.make_spec(), **changes)
+
     with pytest.raises(ChainError, match="daytime limit"):
         start(spec(time="00:15:00"), submit_first=False)
-    start(spec(time="00:15:00"), night=True, submit_first=False)
-    with pytest.raises(ChainError, match="exists"):
-        start(spec(), submit_first=False)
     with pytest.raises(ChainError, match="no time to run"):
-        start(spec(name="s", time="00:02:00"), submit_first=False)
+        start(spec(time="00:02:00"), submit_first=False)
+    with pytest.raises(ChainError, match="no run directory"):
+        start(spec(rundir="/nonexistent"), submit_first=False)
+    (project.rundir / "state.json").write_text('{"step": 5}')
+    with pytest.raises(ChainError, match="is done: step 5 of 5"):
+        start(project.make_spec(), submit_first=False)
+    (project.rundir / "state.json").write_text("{")
+    with pytest.raises(StateError, match="does not parse"):
+        start(project.make_spec(), submit_first=False)
+    (project.rundir / "state.json").unlink()
+    start(spec(time="00:15:00"), night=True, submit_first=False)
+
+
+def test_a_new_chain_waits_for_the_last_to_leave_the_queue(project, monkeypatch):
+    project.use_fakes(monkeypatch, squeue="1001 PENDING 0:00 (None)")
+    spec = project.make_spec()
+    start(spec)
+    with pytest.raises(ChainError, match="still queued or running .*1001"):
+        start(spec)
+    project.use_fakes(monkeypatch)  # squeue does not answer
+    with pytest.raises(ChainError, match="squeue does not answer"):
+        start(spec)
+    project.use_fakes(monkeypatch, squeue="")
+    assert start(spec) == "1002"
+    assert [e["event"] for e in events(spec)] == ["chain", "submitted"]  # the new chain's
 
 
 # --- links --------------------------------------------------------------------------
@@ -143,15 +215,19 @@ def test_done_cancels_the_pre_submitted_link(project):
     rc, out = project.link(spec, 1)
     assert rc == 0, out
     assert step(spec) == 5
+    assert (project.rundir / "cwd.txt").read_text() == str(project.rundir)
     [sbatch] = project.calls("sbatch")
     assert "--dependency=afterany:nojob-" in sbatch and f"{spec.path} 2" in sbatch
     assert project.calls("scancel") == ["scancel 1001"]
+    ended = [e for e in events(spec) if e["event"] == "ended"]
+    assert [(e["link"], e["result"], e["progress"]) for e in ended] == [
+        (1, "done", "step 5 of 5")]
 
 
 def test_sigterm_stops_and_the_next_link_continues(project):
     spec = project.spec(steps=200, delay=0.02)
     proc = project.link(spec, 1, wait=False)
-    wait_for(lambda: (spec.rundir / "state.json").exists() and step(spec) >= 3,
+    wait_for(lambda: (project.rundir / "state.json").exists() and step(spec) >= 3,
              what="workload progress")
     proc.send_signal(signal.SIGTERM)
     out, _ = proc.communicate(timeout=60)
@@ -164,7 +240,7 @@ def test_sigterm_stops_and_the_next_link_continues(project):
     rc, out = project.link(spec, 2)
     assert rc == 0, out
     assert f"continuing at step {stopped} of 200" in out
-    assert (spec.rundir / "before2").exists()
+    assert (project.rundir / "before2").exists()
     assert step(spec) == 200
     assert len(project.calls("sbatch")) == 1  # link 2 is the last
 
@@ -179,6 +255,7 @@ def test_failure_cancels_the_next_link(project):
 
 def test_unreadable_state_stops_the_chain_before_submitting(project):
     spec = project.spec()
+    (project.rundir / "state.json").write_text("{")
     rc, out = project.link(spec, 2)
     assert rc == 1
     assert "chain stops" in out
@@ -193,6 +270,59 @@ def test_finished_run_makes_later_links_exit_at_once(project):
     assert len(project.calls("sbatch")) == 1
 
 
+# --- status and stop ----------------------------------------------------------------
+
+
+def test_status_reports_progress_and_each_link(project, monkeypatch, capsys):
+    spec = project.spec(links=3, steps=200, delay=0.02)
+    proc = project.link(spec, 1, wait=False)
+    wait_for(lambda: (project.rundir / "state.json").exists(), what="workload progress")
+    proc.send_signal(signal.SIGTERM)
+    proc.communicate(timeout=60)
+
+    project.use_fakes(monkeypatch, squeue="1001 PENDING 0:00 (Dependency)")
+    lines, active = status(spec)
+    assert active
+    assert lines[0].startswith("r (test): step ")
+    assert "ended" in lines[1] and "stopped at the walltime" in lines[1]
+    assert lines[2].endswith("PENDING 0:00 (Dependency)") and "job 1001" in lines[2]
+
+    project.use_fakes(monkeypatch, squeue="")
+    lines, active = status(spec)
+    assert not active and lines[2].endswith("cancelled before it started")
+    follow(spec, interval=0)  # returns: nothing left in the queue
+    assert "cancelled before it started" in capsys.readouterr().out
+
+    project.use_fakes(monkeypatch)
+    lines, active = status(spec)
+    assert active and "(squeue does not answer)" in lines
+
+
+def test_stop_cancels_queued_links_and_signals_the_running_one(project, monkeypatch):
+    spec = project.make_spec()
+    project.use_fakes(monkeypatch, squeue="1001 RUNNING 0:10 node1")
+    start(spec)
+    note(spec, "submitted", link=2, job="1002")
+    monkeypatch.setenv("FAKE_SQUEUE", "1001 RUNNING 0:10 node1\n1002 PENDING 0:00 (Dependency)")
+    assert stop(spec) == ["link 1 (job 1001): sent SIGTERM", "link 2 (job 1002): cancelled"]
+    assert project.calls("scancel") == ["scancel --batch --signal=TERM 1001", "scancel 1002"]
+    assert spec.stop_file.exists()
+
+
+def test_a_stopped_chain_cancels_its_next_link_and_runs_no_more(project):
+    spec = project.spec(links=3, steps=200, delay=0.02)
+    proc = project.link(spec, 1, wait=False)
+    wait_for(lambda: (project.rundir / "state.json").exists(), what="workload progress")
+    spec.stop_file.touch()
+    proc.send_signal(signal.SIGTERM)
+    out, _ = proc.communicate(timeout=60)
+    assert proc.returncode == 0, out
+    assert "the chain was stopped" in out
+    assert project.calls("scancel") == ["scancel 1001"]
+    rc, out = project.link(spec, 2)
+    assert rc == 0 and "not running" in out
+
+
 # --- the venv copy ------------------------------------------------------------------
 
 
@@ -204,11 +334,11 @@ def test_local_venv_copy_and_sweep(tmp_path):
     gone, running = project.local / f"{user}-gutsrun-999", project.local / f"{user}-gutsrun-1234"
     gone.mkdir()
     running.mkdir()
-    rc, out = project.link(spec, 1, FAKE_SQUEUE="1234")
+    rc, out = project.link(spec, 1, FAKE_SQUEUE="1234 RUNNING 0:01 node1")
     assert rc == 0, out
     assert f"removed stale {gone}" in out
     assert sorted(project.local.iterdir()) == [running]  # its own copy removed too
-    assert (spec.rundir / "python.txt").read_text().startswith(str(project.local))
+    assert (project.rundir / "python.txt").read_text().startswith(str(project.local))
 
 
 def test_no_squeue_answer_removes_nothing(tmp_path):
@@ -237,32 +367,64 @@ def test_stale_tarball_refuses_and_cancels(tmp_path):
 
 @pytest.mark.hq
 def test_hq_server_and_worker_in_the_link(project):
-    import shutil
     if shutil.which("hq") is None:
         pytest.skip("no hq binary (run inside `nix develop`)")
     spec = project.spec(needs_hq=True)
     rc, out = project.link(spec, 1)
     assert rc == 0, out
-    seen = json.loads((spec.rundir / "hq.json").read_text())
+    seen = json.loads((project.rundir / "hq.json").read_text())
     assert "hq-current" in seen["listed"] and seen["hq"]
-    assert not list(spec.runs.glob("r-hq-*"))  # server dir removed
-    assert list(spec.runs.glob("r-link1-*-hq-worker.log"))
+    assert not list(spec.dir.glob("hq-*"))  # server dir removed
+    assert list(spec.dir.glob("link1-*-hq-worker.log"))
 
 
-# --- the infretis workload ----------------------------------------------------------
+# --- the infretis workload and gutsrun-infretis --------------------------------------
 
 
 def test_infretis_progress_and_argv(tmp_path):
-    run = InfretisRun("examples/2d_potential", "gutsrun", workers=4, steps=100)
+    run = InfretisRun(cores_per_task=2)
+    assert run.needs_hq
+    assert not run.progress(tmp_path).done  # not started
+    assert run.argv("py", tmp_path, 1) == [
+        "py", "-m", "gutsrun_infretis.launcher", "-i", "infretis.toml", "--backend", "hq",
+        "--cores-per-task", "2"]
     (tmp_path / "restart.toml").write_text(
         "[current]\ncstep = 40\n[simulation]\nsteps = 100\n")
     progress = run.progress(tmp_path)
     assert not progress.done and progress.text == "step 40 of 100"
-    assert run.needs_hq
-    assert run.argv("py", tmp_path, 2) == [
-        "py", "bench/bare_run.py", "examples/2d_potential", str(tmp_path), "--workers", "4",
-        "--runner", "gutsrun", "--steps", "100", "--backend", "hq", "--restart"]
-    assert "--restart" not in run.argv("py", tmp_path, 1)
+    assert run.argv("py", tmp_path, 1)[4] == "restart.toml"
     (tmp_path / "restart.toml").write_text("[current]\ncstep = ")
-    with pytest.raises(Exception, match="does not parse"):
+    with pytest.raises(StateError, match="does not parse"):
         run.progress(tmp_path)
+
+
+def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch):
+    (project.fakebin / "hq").write_text(FAKE_HQ)
+    (project.fakebin / "hq").chmod(0o755)
+    project.use_fakes(monkeypatch)
+    rundir = project.rundir
+    with pytest.raises(ChainError, match="no infretis.toml"):
+        cli.submit(rundir, {}, root=project.root)
+    (rundir / "infretis.toml").write_text("")
+    with pytest.raises(ChainError, match="no site"):
+        cli.submit(rundir, {}, root=project.root)
+    (rundir / "gutsrun.toml").write_text('site = "test"\nlinks = 7\nwalltime = "1"\n')
+    with pytest.raises(ChainError, match="unknown key 'walltime'"):
+        cli.submit(rundir, {}, root=project.root)
+    (rundir / "gutsrun.toml").write_text('site = "test"\nlinks = 7\ncores_per_task = 2\n')
+    cli.submit(rundir, {"links": 5, "name": None}, submit_first=False, root=project.root)
+    spec = load_spec(rundir)
+    assert (spec.links, spec.name, spec.time) == (5, "run", "0:14:00")  # just under 15 min
+    assert spec.args == {"cores_per_task": 2}
+    assert spec.workload == "gutsrun_infretis.chain:InfretisRun"
+
+
+def test_bench_workload_imports_from_bench(project):
+    spec = Spec(rundir=str(project.rundir), site="test", name="b", workload="chain:BenchRun",
+                pythonpath=[str(REPO / "bench")],
+                args={"example": "ex", "runner": "bare"}, root=str(project.root))
+    run = spec.make_workload()
+    assert not run.needs_hq
+    assert run.argv("py", project.rundir, 2) == [
+        "py", str(REPO / "bench" / "bare_run.py"), "ex", str(project.rundir), "--in-place",
+        "--runner", "bare"]

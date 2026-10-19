@@ -1,0 +1,43 @@
+# Template for a new site: copy it to sites/<name>.toml and fill it in. It
+# lists every key gutsrun.slurm reads, with what each value means; keys left
+# out take the default shown. In a site file, say why a value was chosen.
+
+[slurm]
+# The partition to submit to: Slurm's name for a queue, a group of nodes with
+# its own rules. Required. `sinfo -s` lists them; pick one of whole CPU nodes.
+partition = "defq"
+
+# Physical cores per node, used as the HQ worker's --cpus. Required. Count
+# cores, not hardware threads: Slurm's CPU count includes both when
+# hyperthreading is on (`lscpu`: Core(s) per socket x Socket(s)).
+cores_per_node = 24
+
+# Whole nodes for each job, so no other job shares them. Default: true.
+# true:  the HQ worker uses every core, and timings are free of other jobs.
+# false: not supported yet. The HQ worker would still claim every core of a
+#        node that other jobs share.
+exclusive = true
+
+# The longest walltime per job set by the cluster's policy rather than by
+# Slurm, e.g. a daytime limit. Default: none. With a value, `submit` refuses
+# a longer --time unless given --night. Leave it out where Slurm itself
+# enforces the partition's limits (sbatch then refuses longer jobs).
+# max_walltime_day = "00:15:00"
+
+[node]
+# Run each job's Python from a copy of the venv unpacked to node-local disk
+# (bin/venv.tar, packed by `submit` when .venv changed). Default: false.
+# true:  every Python start reads node-local disk instead of the shared
+#        file system: faster per task when the venv is on NFS, and it spares
+#        the file server when many nodes start at once. Costs a few seconds
+#        of unpacking per job, and needs local_disk.
+# false: Python runs from the project's .venv where it is. Right when the
+#        venv sits on a fast parallel file system, or the nodes have no
+#        local disk.
+local_venv = false
+
+# Node-local disk that jobs may write to, for local_venv. Default: none.
+# Common: /local, /tmp, /scratch-local. It must exist under the same path on
+# every node. Copies left by jobs that are gone are removed by the next job
+# on that node.
+# local_disk = "/local"

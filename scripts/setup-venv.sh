@@ -8,8 +8,11 @@
 #
 # (infretis and inftools still install from git; their build backends are wheels.)
 #
+# This checkout is installed editable, which gives .venv/bin/gutsrun-infretis.
+#
 # To change a pin: edit requirements.txt, run with REQS=requirements.txt, then
-# regenerate the lock with `.venv/bin/python -m pip freeze > requirements-lock.txt`.
+# regenerate the lock with
+# `.venv/bin/python -m pip freeze --exclude-editable > requirements-lock.txt`.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,4 +22,5 @@ reqs="${REQS:-requirements-lock.txt}"
 "$python" -m venv "$root/.venv"
 "$root/.venv/bin/python" -m pip install --upgrade pip
 "$root/.venv/bin/python" -m pip install -r "$root/$reqs"
-"$root/.venv/bin/python" -c 'import infretis, hyperqueue; print("ok:", infretis.__file__)'
+"$root/.venv/bin/python" -m pip install --no-deps -e "$root"
+"$root/.venv/bin/python" -c 'import infretis, hyperqueue, gutsrun_infretis; print("ok:", infretis.__file__)'
