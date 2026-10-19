@@ -2,7 +2,8 @@
 
 Importing this module first also imports `infretis.setup` first, which
 works around infretis's import-order bug (importing
-`infretis.classes.engines.factory` or `infretis.core.tis` first fails).
+`infretis.classes.engines.factory` first fails: it uses `importlib.util`
+without importing it). `# isort: split` keeps ruff from sorting it later.
 The executor pickles `run_move` before the infretis call, so unpickling
 imports this module before anything from infretis.
 
@@ -36,8 +37,10 @@ import logging
 from functools import partial
 from typing import Any
 
-import infretis.core.tis
 import infretis.setup  # noqa: F401  (must come first, see above)
+
+# isort: split
+import infretis.core.tis
 from infretis.classes.engines.factory import create_engines
 from infretis.classes.formatter import get_log_formatter
 from infretis.classes.orderparameter import create_orderparameters

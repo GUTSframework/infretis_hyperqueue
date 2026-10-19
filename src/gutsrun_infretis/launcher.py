@@ -76,6 +76,9 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
+import gutsrun_infretis.worker  # noqa: F401  (imports infretis.setup first)
+
+# isort: split
 import tomli
 import tomli_w
 from infretis.asyncrunner import future_list
@@ -83,7 +86,6 @@ from infretis.classes.repex import REPEX_state
 from infretis.scheduler import scheduler
 from infretis.setup import setup_config
 
-import gutsrun_infretis.worker  # noqa: F401  (imports infretis.setup first)
 from gutsrun import TaskExecutor
 from gutsrun.backends import Backend
 

@@ -5,6 +5,7 @@ libraries). The `slow` exact check runs LAMMPS (~3 min); run it with
 `pytest -m slow`.
 """
 
+import ast
 import json
 import os
 import shutil
@@ -176,3 +177,16 @@ def test_exact_lammps_workers_1(tmp_path):
     for name in ("infretis_data.txt", "restart.toml"):
         bare, guts = (tmp_path / "bare" / name), (tmp_path / "guts" / name)
         assert bare.read_bytes() == guts.read_bytes(), name
+
+
+@pytest.mark.parametrize("module, first", [
+    ("worker", "infretis.setup"), ("launcher", "gutsrun_infretis.worker")])
+def test_infretis_setup_is_imported_before_the_rest_of_infretis(module, first):
+    # A runtime check cannot see a wrong order today: infretis.core.tis
+    # happens to import importlib.util, which the factory needs.
+    source = ROOT / "src" / "gutsrun_infretis" / f"{module}.py"
+    names = [node.names[0].name if isinstance(node, ast.Import) else node.module or ""
+             for node in ast.parse(source.read_text()).body
+             if isinstance(node, ast.Import | ast.ImportFrom)]
+    ours = [n for n in names if n.split(".")[0] in ("infretis", "gutsrun_infretis")]
+    assert ours[0] == first
