@@ -27,8 +27,11 @@ for this run only (infretis itself stays unmodified):
 - `gutsrun-timings.jsonl`: per-move timings (see gutsrun.executor).
 - `gutsrun-stops.jsonl`: one line per stop by a signal, with the move time
   it lost: each move not yet through `treat_output` is redone after the
-  restart, so its time from submit to its end (or to the stop, if still
-  running) is lost, times --cores-per-task. Also on stderr.
+  restart, so its wall-clock time from submit to its end (or to the stop,
+  if still running) is lost. `lost_s` sums these over the moves, which ran
+  in parallel; `longest_s` is the longest, about what the run was set back;
+  `lost_core_s` is `lost_s` times --cores-per-task, cores reserved rather
+  than CPU time used. Also on stderr.
 
 Exit codes: 0 = all steps done, 3 = stopped by a signal (restart from
 restart.toml), 4 = infretis refused to start (the reason and what to do
@@ -299,13 +302,16 @@ def report_lost(signal_name: str, cores_per_task: int) -> None:
     now = time.time()
     moves = MOVES.lost(now)
     seconds = round(sum(m["seconds"] for m in moves), 3)
-    text = (f"stopped by {signal_name}: {len(moves)} move(s) not saved, "
-            f"{seconds:.1f} s of move time lost ({seconds * cores_per_task:.1f} core-s)")
+    longest = max((m["seconds"] for m in moves), default=0.0)
+    text = (f"stopped by {signal_name}: {len(moves)} move(s) not saved, to be redone; "
+            f"{seconds:.1f} s of move time summed over them (longest {longest:.1f} s), "
+            f"{seconds * cores_per_task:.1f} core-s reserved at {cores_per_task} "
+            f"core(s) per move")
     log.warning("%s", text)
     print(text, file=sys.stderr)
     row = {"time": now, "signal": signal_name, "cores_per_task": cores_per_task,
-           "lost_s": seconds, "lost_core_s": round(seconds * cores_per_task, 3),
-           "moves": moves}
+           "lost_s": seconds, "longest_s": longest,
+           "lost_core_s": round(seconds * cores_per_task, 3), "moves": moves}
     with open("gutsrun-stops.jsonl", "a") as f:
         f.write(json.dumps(row) + "\n")
 

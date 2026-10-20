@@ -104,8 +104,10 @@ infretis's own outputs, as without gutsrun, plus:
   timings (with the host each move ran on).
 - `gutsrun-stops.jsonl`: one line per link stopped by a signal, with the
   move time the stop lost. Moves that had not been saved when the link
-  stopped are redone by the next link; the link's log says how many, and
-  how many seconds and core-seconds they had used.
+  stopped are redone by the next link; the link's log says how many, the
+  wall-clock seconds they had used, summed and the longest (the moves ran
+  in parallel, so the longest is about what the run was set back), and the
+  core-seconds reserved for them (not CPU time measured).
 - `restart.toml.bak.<step>`: a copy of `restart.toml` at each link's start.
 
 infretis writes its data to `infretis_data.txt`, unless that file exists
