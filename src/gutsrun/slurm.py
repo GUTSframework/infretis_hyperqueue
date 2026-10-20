@@ -80,6 +80,10 @@ from types import FrameType
 from typing import IO, Any, Protocol
 
 EXIT_STOPPED = 3
+# A link's result when a signal stopped its workload and the next link may
+# continue. The walltime signal and a plain `scancel` are both SIGTERM, so
+# the link cannot tell them apart; its log says when the stop came.
+STOPPED_BY_SIGNAL = "stopped by a signal (walltime or scancel)"
 HQ_VERSION = "0.26.2"  # keep in sync with flake.nix and scripts/get-hq.sh
 # The project checkout this module runs from (src/gutsrun/slurm.py): sites/,
 # .venv and bin/ live there.
@@ -648,7 +652,7 @@ def why_over(spec: Spec, record: list[dict[str, Any]]) -> str:
     log_file = spec.dir / f"link{link}-{job}.out"
     if (link, job) in ended:
         result = ended[(link, job)]["result"]
-        if result == "stopped at the walltime" and link >= spec.links:
+        if result == STOPPED_BY_SIGNAL and link >= spec.links:
             ran = "its only link ran" if spec.links == 1 else f"all {spec.links} links ran"
             return f"{ran}; `submit` again to continue"
         return f"link {link}: {result}; see {log_file}"
@@ -783,6 +787,7 @@ class Forwarder:
 def run_link(spec_path: str | Path, link: int) -> int:
     """Run link number `link` of a chain (steps 1-7 in the module docstring);
     returns the job's exit code."""
+    started = time.monotonic()
     forwarder = Forwarder()
     spec = Spec.load(spec_path)
     rundir = Path(spec.rundir)
@@ -885,8 +890,10 @@ def run_link(spec_path: str | Path, link: int) -> int:
                 return end(0, "stopped by request", progress.text)
             then = (f"link {link + 1} continues" if next_job
                     else f"no further link (links={spec.links})")
-            log.info(f"stopped at the walltime; run: {progress.text}; {then}")
-            return end(0, "stopped at the walltime", progress.text)
+            ran = walltime(round(time.monotonic() - started))
+            log.info(f"{STOPPED_BY_SIGNAL} after {ran} of {spec.time}; "
+                     f"run: {progress.text}; {then}")
+            return end(0, STOPPED_BY_SIGNAL, progress.text)
         log.info(f"workload failed (exit {exit_code}); run: {progress.text}; chain stops")
         cancel_next("failed")
         return end(1, f"failed (exit {exit_code})", progress.text)

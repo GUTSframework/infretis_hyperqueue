@@ -20,6 +20,7 @@ from conftest import wait_for
 import gutsrun.slurm as slurm
 import gutsrun_infretis.chain as cli
 from gutsrun.slurm import (
+    STOPPED_BY_SIGNAL,
     ChainError,
     Forwarder,
     Report,
@@ -301,6 +302,7 @@ def test_sigterm_stops_and_the_next_link_continues(project):
     out, _ = proc.communicate(timeout=60)
     assert proc.returncode == 0, out
     assert "link 2 continues" in out
+    assert f"{STOPPED_BY_SIGNAL} after 0:00:" in out  # when the stop came
     assert project.calls("scancel") == []
     stopped = step(spec)
     assert 3 <= stopped < 200
@@ -388,7 +390,7 @@ def test_status_reports_progress_and_each_link(project, monkeypatch, capsys):
     report = status(spec)
     assert report.active and report.over is None
     assert report.progress.startswith("r (test): step ")
-    assert "ended" in report.links[0] and "stopped at the walltime" in report.links[0]
+    assert "ended" in report.links[0] and STOPPED_BY_SIGNAL in report.links[0]
     assert report.links[1].endswith("PENDING 0:00 (Dependency)")
     assert "job 1001" in report.links[1]
     assert report.states == ["1 ended", "2 PENDING (Dependency)"]
@@ -422,13 +424,13 @@ def test_why_a_chain_is_over(project):
     def ended(link: int, result: str) -> dict:
         return {"event": "ended", "link": link, "job": str(link), "result": result}
 
-    walltime = [submitted(1), started(1), submitted(2), ended(1, "stopped at the walltime")]
+    walltime = [submitted(1), started(1), submitted(2), ended(1, STOPPED_BY_SIGNAL)]
     assert why_over(spec, [{"event": "chain"}]) == "no link was submitted"
     assert why_over(spec, [submitted(1), started(1), ended(1, "done")]) == "the run is done"
-    assert why_over(spec, [*walltime, started(2), ended(2, "stopped at the walltime")]) == (
+    assert why_over(spec, [*walltime, started(2), ended(2, STOPPED_BY_SIGNAL)]) == (
         "all 2 links ran; `submit` again to continue")
     assert why_over(dataclasses.replace(spec, links=1),
-                    [submitted(1), started(1), ended(1, "stopped at the walltime")]) == (
+                    [submitted(1), started(1), ended(1, STOPPED_BY_SIGNAL)]) == (
         "its only link ran; `submit` again to continue")
     assert why_over(spec, [*walltime, started(2), ended(2, "failed (exit 1)")]) == (
         f"link 2: failed (exit 1); see {spec.dir}/link2-2.out")
