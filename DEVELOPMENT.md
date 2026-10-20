@@ -127,7 +127,9 @@ other infretis versions run if those are unchanged, otherwise it stops
 (`--allow-other-infretis` overrides). Exit codes: 0 done, 3 stopped by a
 signal, 4 infretis refused to start. Logs: `gutsrun.log`; moves log to
 `worker{pin}.log` as before; per-move timings go to
-`gutsrun-timings.jsonl` (`bench/timings_summary.py` summarises them).
+`gutsrun-timings.jsonl` (`bench/timings_summary.py` summarises them);
+the move time each stop lost goes to `gutsrun-stops.jsonl` (moves not yet
+through `treat_output`, by pin, from submit to their end or the stop).
 
 ## Chains
 

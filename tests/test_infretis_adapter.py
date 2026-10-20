@@ -145,6 +145,11 @@ def test_sigterm_inside_treat_output(tmp_path):
     import tomli
     cstep = tomli.loads((rd / "restart.toml").read_text())["current"]["cstep"]
     assert cstep >= 1
+    # The treated move is saved; the other pin's move is lost and redone.
+    (stop,) = [json.loads(line) for line in (rd / "gutsrun-stops.jsonl").open()]
+    assert stop["signal"] == "SIGTERM" and len(stop["moves"]) == 1, stop
+    assert stop["lost_s"] == stop["moves"][0]["seconds"] > 0
+    assert "1 move(s) not saved" in out
 
     proc = launch(rd, "-i", "restart.toml")
     out, _ = proc.communicate(timeout=600)
