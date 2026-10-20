@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fast Track step 5: each case through bare infretis, gutsrun (local) and
+# Each case through bare infretis, gutsrun (local) and
 # gutsrun (HQ), back to back, same seed and steps. Run inside `nix develop`.
 #
 #   bench/step5.sh runs/laptop/2026-10-16-step5 [cases...]

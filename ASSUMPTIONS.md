@@ -60,11 +60,11 @@ its admins.
 - The soft limit on open files in a job is 1024 (hard: 131072).
 - No GROMACS or LAMMPS from the site. Engines come the way researchers get
   theirs; which way is open.
-- GPU nodes for chignolin: unknown.
+- Every `defq` node has at least one GPU (A2 to A100, per `sinfo`); GPU
+  jobs are untested.
 
 ## Snellius (first target)
 
-- No account yet (ask the project lead). HPC-time budget not yet set.
 - No SURF guidance found on running an HQ server inside a job.
 
 ## Examples (infentory, local clone `0640581`)

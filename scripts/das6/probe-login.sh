@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read-only checks on the DAS-6 login node (Fast Track step 6). Changes
+# Read-only checks on the DAS-6 login node. Changes
 # nothing. Run from the repo root on fs0:
 #
 #   bash scripts/das6/probe-login.sh 2>&1 | tee runs/das6/probe-login.txt

@@ -9,13 +9,6 @@ GUTS Fast Track: make infretis usable on HPC clusters, with multi-node runs
 that survive walltime limits. HQ is the Task Scheduler. Development on
 DAS-6; Snellius is the first real target, LUMI and JSC later.
 
-Plan, decisions and results live in the maintainers' vault (project
-`guts`):
-
-- plan: `projects/guts/plans/2026-10-15-fast-track-infretis-on-hpc-via-hyperqueue.md`
-- architecture: `notes/2026-10-15-guts-architecture-diagram.md`, and
-  `~/code/GUTS/GUTSnotes/design.md`
-
 ## Components
 
 How this repo maps onto the GUTSnotes design:
@@ -66,7 +59,7 @@ bench/timings_summary.py  per-phase medians from gutsrun-timings.jsonl
 examples/               prepared infentory cases (examples/README.md)
 src/gutsrun/            generic: TaskExecutor + backends; slurm.py chains Slurm jobs (no MD imports)
 src/gutsrun_infretis/   infretis adapter, launcher, chain workload and command (the only infretis-aware code)
-tests/                  pytest suite (gate C; adapter tests need infretis)
+tests/                  pytest suite (adapter tests need infretis)
 ```
 
 `runs/` holds bench outputs and is not tracked.
@@ -194,18 +187,3 @@ through eduVPN. Code goes there with `scripts/sync.sh <host> push` (which
 writes `REVISION`, since `.git` is not copied), and `runs/das6/` comes back
 with `pull`. `scripts/wait-jobs.sh <host> <jobid>` (or `--run <rundir>` for a
 chain) waits on the laptop until jobs are done.
-
-## Status
-
-| Step | | State |
-|---|---|---|
-| 1 | Repo setup | done |
-| 2 | Bare infretis baseline + MD move times | done on the laptop (GROMACS at real size still open) |
-| 3 | `gutsrun` + test suite (gate C) | done on the laptop; gate C passed (24/24) |
-| 4 | infretis adapter + launcher | done on the laptop; exact check passes (LAMMPS) |
-| 5 | HQ backend, local (gate A, D1) | done on the laptop; gate A passed; D1 numbers in the vault |
-| 6 | DAS-6 preflight | done, except the MD engines (they come the researchers' way) |
-| 7 | DAS-6, one node (gate B) | gate B partial: 2d_potential chains with both runners; the real MD case waits on the engines |
-| 8 | DAS-6, multi-node + drills | |
-| 9 | Validation + metrics | |
-| 10 | Snellius port (gate D) | |
