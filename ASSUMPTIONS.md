@@ -70,7 +70,12 @@ its admins.
 
 ## Snellius (first target)
 
-- No SURF guidance found on running an HQ server inside a job.
+- SURF documents HyperQueue: a module `HyperQueue/0.19.0` (stack `2023`),
+  the server running persistently on a login node, and workers in Slurm
+  jobs (`srun --overlap hq worker start --manager slurm`). We pin 0.26.2
+  (client and server must match), so we bring our own binary
+  (`scripts/get-hq.sh`) and run the server inside each job; the module is
+  not used.
 
 ## Examples (infentory, local clone `0640581`)
 
