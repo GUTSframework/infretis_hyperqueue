@@ -61,7 +61,7 @@ SETUP = """
 [environment]
 setup = '''
 export GUTSRUN_TEST_SETUP="loaded $SLURM_JOB_ID"
-echo "noise on stdout"
+echo "setup output"
 '''
 """
 
@@ -213,7 +213,7 @@ def test_site_setup_sets_the_workloads_environment(project):
     spec = project.spec()
     rc, out = project.link(spec, 1, SLURM_JOB_ID="77")
     assert rc == 0, out
-    assert "noise on stdout" in out  # in the link's log
+    assert "setup output" in out  # in the link's log
     assert (project.rundir / "setup.txt").read_text() == "loaded 77"
 
 
