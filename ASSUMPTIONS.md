@@ -20,9 +20,13 @@ Exact Python package versions: `requirements-lock.txt`.
 
 ## Runtime design
 
-- One HQ task per MC move by default. Long-running "warm" workers per pin
-  only if starting a task (mostly Python imports) turns out to cost more
-  than 10 % of a real MD move; open until real-size MD moves are measured.
+- MD engines come from the cluster, usually as a site module whose name
+  differs per cluster (reported); a site file's `[environment] setup`
+  loads it. GUTS does not ship engines.
+- One HQ task per MC move, each a fresh Python process: starting one
+  costs about 1 s on DAS-6 (mostly imports). Production moves take minutes
+  to hours, up to about a day (reported), so this is a few percent at most
+  and long-running "warm" workers per pin are not planned.
 - `restart.toml` is the only restart authority: no HQ `--journal` for chained
   runs, a fresh `HQ_SERVER_DIR` per Slurm job.
 - No infretis fork: a launcher replaces `ProcessPoolExecutor` at run time.
@@ -58,8 +62,9 @@ its admins.
 - Node-local disk at `/local` (NVMe); shared scratch at `/var/scratch/$USER`
   (40 GB quota); `/home` has a 5 GB quota.
 - The soft limit on open files in a job is 1024 (hard: 131072).
-- No GROMACS or LAMMPS from the site. Engines come the way researchers get
-  theirs; which way is open.
+- No GROMACS or LAMMPS from the site; users install software themselves
+  (e.g. conda-forge GROMACS, fine for testing). No `[environment] setup`
+  in `sites/das6.toml` until an engine is installed.
 - Every `defq` node has at least one GPU (A2 to A100, per `sinfo`); GPU
   jobs are untested.
 

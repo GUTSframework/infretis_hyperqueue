@@ -80,6 +80,7 @@ def main() -> None:
     step = json.loads(state.read_text())["step"] if state.exists() else 0
     (args.rundir / "python.txt").write_text(sys.executable)
     (args.rundir / "cwd.txt").write_text(os.getcwd())
+    (args.rundir / "setup.txt").write_text(os.environ.get("GUTSRUN_TEST_SETUP", ""))
     if "HQ_SERVER_DIR" in os.environ:
         workers = hq_workers(args.workers)
         (args.rundir / "hq.json").write_text(json.dumps({

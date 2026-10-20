@@ -138,6 +138,11 @@ differ between clusters:
   leave it out.
 - **Where Python starts from.** With `local_venv = true`, each job unpacks
   the venv to node-local disk, which helps when the venv is on NFS.
+- **How the MD engine is loaded.** Usually a site module, whose name
+  differs from cluster to cluster. `[environment] setup` holds the lines
+  that load it (e.g. `module load GROMACS`); each link runs them before
+  it starts HQ and infretis, and every move runs in the environment they
+  leave.
 
 ## DAS-6
 

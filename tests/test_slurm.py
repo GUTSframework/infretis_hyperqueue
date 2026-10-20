@@ -34,6 +34,7 @@ from gutsrun.slurm import (
     revision,
     sbatch_argv,
     seconds,
+    setup_env,
     start,
     status,
     stop,
@@ -54,6 +55,14 @@ max_walltime_day = "00:15:00"
 [node]
 local_disk = "{local_disk}"
 local_venv = {local_venv}
+"""
+# Exports a variable and writes to stdout, as `module load` may.
+SETUP = """
+[environment]
+setup = '''
+export GUTSRUN_TEST_SETUP="loaded $SLURM_JOB_ID"
+echo "noise on stdout"
+'''
 """
 
 FAKE_SBATCH = """\
@@ -191,6 +200,31 @@ def test_site_refusals(project):
         Site(project.root, "test")
     with pytest.raises(ChainError, match="known: test"):
         Site(project.root, "nosuch")
+
+
+def test_setup_env_keeps_values_with_newlines_and_equals_signs():
+    env = setup_env('export A="x=1\ny"; unset B', {"PATH": os.environ["PATH"], "B": "1"})
+    assert env["A"] == "x=1\ny" and "B" not in env
+
+
+def test_site_setup_sets_the_workloads_environment(project):
+    path = project.root / "sites" / "test.toml"
+    path.write_text(path.read_text() + SETUP)
+    spec = project.spec()
+    rc, out = project.link(spec, 1, SLURM_JOB_ID="77")
+    assert rc == 0, out
+    assert "noise on stdout" in out  # in the link's log
+    assert (project.rundir / "setup.txt").read_text() == "loaded 77"
+
+
+def test_a_failing_site_setup_fails_the_link(project):
+    path = project.root / "sites" / "test.toml"
+    path.write_text(path.read_text() + '[environment]\nsetup = "false"\n')
+    spec = project.spec()
+    rc, out = project.link(spec, 1)
+    assert rc == 1
+    assert "the site's setup failed (exit 1)" in out
+    assert project.calls("scancel") == ["scancel 1001"]
 
 
 # --- starting -----------------------------------------------------------------------

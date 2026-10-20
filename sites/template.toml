@@ -42,3 +42,13 @@ local_venv = false
 # and moves run with the copy's Python by that path. Copies left by jobs
 # that are gone are removed by the next job on that node.
 # local_disk = "/local"
+
+[environment]
+# Shell lines each link runs in bash before it starts anything, to make the
+# programs the tasks call available, e.g. the MD engine's `module load`.
+# Default: none. Module names differ between clusters (`module avail` or
+# `module spider <name>` lists them). The HQ workers on every node of the
+# job, so every task, and the workload run in the environment these lines
+# leave; their output goes to the link's log, and a failing line fails the
+# link. Several lines: a TOML multi-line string ("""...""").
+# setup = "module load GROMACS"

@@ -32,7 +32,10 @@ Each link:
    and runs that copy: starting Python from a node-local disk is faster
    than from NFS, and spares the file server. First removes copies left by
    jobs that are gone (a job killed at its walltime skips its cleanup).
-5. If the workload needs HQ: starts an HQ server and one worker inside the
+5. If the site sets `[environment] setup`, runs those lines in bash, e.g.
+   `module load` for the programs the tasks call. The HQ workers, and so
+   their tasks, and the workload run in the environment they leave.
+6. If the workload needs HQ: starts an HQ server and one worker inside the
    job, in a fresh server directory on the shared file system, without a
    journal. The workload's own state is what a restart continues from.
    With `nodes` > 1, starts one HQ worker on each of the job's other nodes
@@ -40,13 +43,13 @@ Each link:
    first if the site uses one, at the same path as on the first node, since
    tasks run with the workload's interpreter. At the end of the link,
    stopping the server ends these workers, and each removes its copy.
-6. Runs the workload's command in the run directory, passing SIGTERM and
+7. Runs the workload's command in the run directory, passing SIGTERM and
    SIGINT on. Slurm sends SIGTERM `margin` seconds before the walltime
    (`--signal=B:TERM@margin`), and may send it up to 60 s earlier than asked.
    A signal that comes before the workload has set up its own handler
    (for infretis: while it imports, about a second) kills it; the link then
    reports "failed (exit -15)", although nothing was written.
-7. Cancels the next link if the run is done, failed or stopped, or the link
+8. Cancels the next link if the run is done, failed or stopped, or the link
    itself crashed. A workload exits with EXIT_STOPPED when a signal stopped
    it and it can continue.
 
@@ -196,7 +199,8 @@ class Site:
     for tests and for trying a link on a machine without Slurm."""
 
     KEYS = {"slurm": {"partition", "cores_per_node", "exclusive", "max_walltime_day"},
-            "node": {"local_venv", "local_disk"}}
+            "node": {"local_venv", "local_disk"},
+            "environment": {"setup"}}
 
     def __init__(self, root: str | Path, name: str) -> None:
         path = Path(root) / "sites" / f"{name}.toml"
@@ -223,6 +227,18 @@ class Site:
                                        or node.get("local_disk"))
         if self.local_venv and not self.local_disk:
             raise ChainError(f"{path}: local_venv = true needs local_disk")
+        self.setup: str | None = data.get("environment", {}).get("setup")
+
+
+def setup_env(setup: str, env: dict[str, str]) -> dict[str, str]:
+    """The environment after running the site's `setup` lines (e.g. `module
+    load`) in bash, starting from `env`. Their output goes to the link's log."""
+    script = f"{{\n{setup}\n}} >&2 || exit 1\nenv -0"
+    done = subprocess.run(["bash", "-c", script], env=env, stdout=subprocess.PIPE)
+    if done.returncode != 0:
+        raise ChainError(f"the site's setup failed (exit {done.returncode}): {setup!r}")
+    pairs = (entry.partition("=") for entry in done.stdout.decode().split("\0") if entry)
+    return {name: value for name, _, value in pairs}
 
 
 def setup_logging() -> None:
@@ -429,10 +445,12 @@ def hq_binary(root: str | Path) -> str:
 
 
 @contextlib.contextmanager
-def hq_server(root: str | Path, server: Path, log_prefix: str, cores: int) -> Iterator[str]:
+def hq_server(root: str | Path, server: Path, log_prefix: str, cores: int,
+              env: dict[str, str] | None = None) -> Iterator[str]:
     """Run an HQ server and one worker on this node for the `with` block;
-    yields the directory of the hq binary. Stops both and removes the
-    server directory when the block ends, also on errors."""
+    yields the directory of the hq binary. The worker, and so its tasks,
+    runs in `env`. Stops both and removes the server directory when the
+    block ends, also on errors."""
     hq = hq_binary(root)
     shutil.rmtree(server, ignore_errors=True)
     # Created here, so that the wait below lists an existing directory.
@@ -448,7 +466,7 @@ def hq_server(root: str | Path, server: Path, log_prefix: str, cores: int) -> It
         with open(f"{log_prefix}-hq-worker.log", "wb") as out:
             processes.append(subprocess.Popen(
                 [hq, "worker", "start", "--server-dir", str(server), "--cpus", str(cores)],
-                stdout=out, stderr=subprocess.STDOUT))
+                stdout=out, stderr=subprocess.STDOUT, env=env))
         log.info(f"hq server and worker started in {server}")
         yield str(Path(hq).parent)
     finally:
@@ -464,9 +482,11 @@ def hq_server(root: str | Path, server: Path, log_prefix: str, cores: int) -> It
 
 
 @contextlib.contextmanager
-def hq_workers_elsewhere(spec: Spec, link: int, server: Path, cores: int) -> Iterator[None]:
+def hq_workers_elsewhere(spec: Spec, link: int, server: Path, cores: int,
+                         env: dict[str, str] | None = None) -> Iterator[None]:
     """One HQ worker on each of the job's other nodes for the `with` block:
-    one srun step that runs `worker` there (see `run_worker`). Stops them
+    one srun step that runs `worker` there (see `run_worker`), in `env`
+    (srun passes the environment on to the step). Stops them
     when the block ends by stopping the HQ server: each worker then exits
     and its `worker` removes the node's venv copy. srun does not pass
     SIGTERM on (it kills the step), so it is signalled only if the step
@@ -481,7 +501,7 @@ def hq_workers_elsewhere(spec: Spec, link: int, server: Path, cores: int) -> Ite
             "--relative=1", f"--cpus-per-task={cores}", "--kill-on-bad-exit=0",
             python, "-m", "gutsrun.slurm", "worker", str(spec.path), str(link), str(server)]
     log.info(f"hq workers on {others} more node(s): {shlex.join(argv)}")
-    step = subprocess.Popen(argv)
+    step = subprocess.Popen(argv, env=env)
     try:
         yield
     finally:
@@ -785,7 +805,7 @@ class Forwarder:
 
 
 def run_link(spec_path: str | Path, link: int) -> int:
-    """Run link number `link` of a chain (steps 1-7 in the module docstring);
+    """Run link number `link` of a chain (steps 1-8 in the module docstring);
     returns the job's exit code."""
     started = time.monotonic()
     forwarder = Forwarder()
@@ -850,15 +870,18 @@ def run_link(spec_path: str | Path, link: int) -> int:
                     assert site.local_disk  # Site checks it
                     python = stack.enter_context(local_venv(spec.root, site.local_disk, job))
                 env = dict(os.environ)
+                if site.setup:
+                    log.info(f"site setup: {site.setup!r}")
+                    env = setup_env(site.setup, env)
                 if workload.needs_hq:
                     server = spec.dir / f"hq-{job}"
                     hq_dir = stack.enter_context(hq_server(spec.root, server, log_prefix,
-                                                           site.cores))
-                    env["HQ_SERVER_DIR"] = str(server)
-                    env["PATH"] = os.pathsep.join([hq_dir, env.get("PATH", "")])
+                                                           site.cores, env))
                     if spec.nodes > 1:
                         stack.enter_context(hq_workers_elsewhere(spec, link, server,
-                                                                 site.cores))
+                                                                 site.cores, env))
+                    env["HQ_SERVER_DIR"] = str(server)
+                    env["PATH"] = os.pathsep.join([hq_dir, env.get("PATH", "")])
                 argv = workload.argv(python, rundir, link)
                 if forwarder.received:
                     log.info("not starting the workload")
