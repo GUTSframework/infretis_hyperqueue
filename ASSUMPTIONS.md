@@ -14,7 +14,7 @@ What this repo takes as given. If one turns out wrong, update this file
 | HQ | 0.26.2, binary and PyPI client | measured in `../hyperqueue_test`; client and server must match. Before moving to 0.27.x, rerun the 1024-task autoalloc regression check |
 | nixpkgs | `151fa4e` (same lock as `../hyperqueue_test`) | |
 | GROMACS | 2026.3 (nixpkgs; conda-forge on DAS-6) | production clusters use their own module |
-| LAMMPS | 22Jul2025_update4 (nixpkgs), update6 (conda-forge on DAS-6), REAXFF + QEQ enabled | water_dissociation |
+| LAMMPS | 22Jul2025_update4 (nixpkgs), 29Aug2024 (conda-forge on DAS-6), REAXFF + QEQ enabled | water_dissociation; on DAS-6 the newest conda-forge build whose `lmp` runs there (below) |
 
 Exact Python package versions: `requirements-lock.txt`.
 
@@ -66,7 +66,11 @@ its admins.
 - The soft limit on open files in a job is 1024 (hard: 131072).
 - No GROMACS or LAMMPS from the site; users install software themselves.
   `scripts/das6/install-engines.sh` installs conda-forge's builds (CPU,
-  no MPI; the laptop's versions) in `/var/scratch/$USER/miniforge3`:
+  no MPI) in `/var/scratch/$USER/miniforge3`: GROMACS 2026.3, the
+  laptop's version, and LAMMPS 29Aug2024 as one exact build. DAS-6's
+  glibc is older than 2.29; conda-forge's LAMMPS builds from 2026 need
+  2.34 or 2.38 while declaring 2.17, so conda installs them and `lmp`
+  fails to start. The pinned build needs no more than 2.14. Install:
   about 44k inodes and 1.2 GB. `/home` and `/var/scratch` have no file
   limit (`quota` shows 0). conda-forge's `gmx` picks AVX2_256 on AMD
   EPYC; production clusters use their own optimised builds, so DAS-6

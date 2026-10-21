@@ -15,17 +15,20 @@
 # 5 GB quota). Removing $ROOT undoes it all.
 #
 # Also records what the install costs in files and bytes, and the quotas
-# (`quota`, `df -i`) before and after. Run again to repeat the checks: an
-# existing env is kept.
+# (`quota`, `df -i`) before and after. Run again to repeat the checks, or
+# after changing a pin: an env without the pinned builds is replaced.
 set -euo pipefail
 
 ROOT="${ROOT:-/var/scratch/$USER/miniforge3}"
 MINIFORGE_VERSION=26.7.2-0
 MINIFORGE_SHA256=281b0ac7d550802efc81af633225a5e6116d29ae72f3ab4eae7168c3931a4c05
-# The laptop's versions (ASSUMPTIONS.md). Build strings pick the CPU,
-# non-MPI variants: infretis starts one engine process per move.
+# Build strings pick the CPU, non-MPI variants: infretis starts one engine
+# process per move. GROMACS is the laptop's version (ASSUMPTIONS.md). LAMMPS
+# is the stable 29Aug2024: conda-forge's 2025.07.22 builds need glibc 2.34
+# or 2.38 although they declare 2.17, and DAS-6's glibc is older, so their
+# lmp does not start there.
 GROMACS_SPEC="gromacs=2026.3=nompi_*"
-LAMMPS_SPEC="lammps=2025.07.22=cpu_*_nompi_*"
+LAMMPS_SPEC="lammps=2024.08.29=cpu_py312_h5afe51e_nompi_9"
 
 export CONDA_PKGS_DIRS="$ROOT/pkgs"
 section() { printf '\n== %s\n' "$1"; }
@@ -57,8 +60,24 @@ fi
 conda() { "$ROOT/bin/python" -m conda "$@"; }
 conda --version
 
-if [ ! -d "$ROOT/envs/md" ]; then
+# A spec as a pattern for its URL in `conda list --explicit`, e.g.
+# gromacs=2026.3=nompi_* -> */gromacs-2026.3-nompi_*.conda*
+url_pattern() {
+    local name="${1%%=*}" rest="${1#*=}"
+    echo "*/$name-${rest%%=*}-${rest#*=}.conda*"
+}
+has_pins() {
+    local installed gromacs lammps
+    installed="$(conda list -n md --explicit)" || return 1
+    gromacs="$(url_pattern "$GROMACS_SPEC")" lammps="$(url_pattern "$LAMMPS_SPEC")"
+    # shellcheck disable=SC2053  # the right-hand sides are patterns
+    [[ "$installed" == $gromacs && "$installed" == $lammps ]]
+}
+if [ ! -d "$ROOT/envs/md" ] || ! has_pins; then
     section "env md"
+    # Replaced, not updated: a pin can change the env's Python, which
+    # `conda install` keeps.
+    if [ -d "$ROOT/envs/md" ]; then conda remove --yes --quiet -n md --all; fi
     conda create --yes --quiet -n md -c conda-forge --override-channels \
         "$GROMACS_SPEC" "$LAMMPS_SPEC"
     section "files before clean"
@@ -81,9 +100,10 @@ command -v gmx lmp
 # as production speed.
 gmx --version 2>&1 | grep -E '^GROMACS version|^SIMD instructions|^Precision|^MPI library'
 # water_dissociation needs pair_style reaxff and fix qeq/reaxff (REAXFF).
-lmp -h | sed -n '/^Installed packages/,/^List of individual/p' | grep -ow REAXFF \
+lmp_help="$(lmp -h 2>&1)" || { echo "lmp does not run:" >&2; echo "$lmp_help" >&2; exit 1; }
+sed -n '/^Installed packages/,/^List of individual/p' <<<"$lmp_help" | grep -ow REAXFF \
     || { echo "LAMMPS lacks REAXFF" >&2; exit 1; }
-lmp -h | grep -E -m2 '^Large-scale|^LAMMPS version' || true
+grep -E -m2 '^Large-scale|^LAMMPS version' <<<"$lmp_help" || true
 
 section "files and size"
 printf 'env md: %s inodes\npackage cache: %s inodes, %s not shared with the env\nall of %s: %s inodes\n' \
