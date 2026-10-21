@@ -16,6 +16,12 @@ upstream, among them restarts that continue the run's own random streams
 (upstream restarts from seed 0's) and an atomic `restart.toml`. Its
 results match upstream's for runs that are never restarted.
 
+Restarts are exact only with `workers = 1`. With more workers, a restart
+redoes some interrupted moves with new random numbers, gives a few moves
+the same random stream, and can drop a move that was already redone once.
+The fork does not fix this yet; [QUICKSTART.md](QUICKSTART.md) says what
+it means for a run.
+
 Part of the GUTS Fast Track. For how it is built, tested and measured, see
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
@@ -40,6 +46,9 @@ A link that fails, or finds `restart.toml` unreadable, cancels the next
 one, so a broken run does not burn through its links.
 
 ## Quick start
+
+New to this? [QUICKSTART.md](QUICKSTART.md) walks through a first run
+step by step, on DAS-6 with LAMMPS.
 
 Once per cluster, on its login node, in a copy of this repository:
 
