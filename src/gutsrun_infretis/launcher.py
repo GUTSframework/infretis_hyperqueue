@@ -450,6 +450,9 @@ def main(argv: list[str] | None = None) -> int:
     except Stop as s:
         report_lost(str(s), args.cores_per_task)
         return EXIT_STOPPED
+    except Exception:
+        log.exception("run failed")
+        raise
     finally:
         for ex in EXECUTORS:
             ex.shutdown(wait=False, cancel_futures=True)

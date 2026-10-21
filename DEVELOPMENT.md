@@ -131,8 +131,9 @@ The check has gaps: it covers both whichever engine a run uses, so a
 change to one stops runs of the other; it does not cover the other
 engines (ASE, CP2K, TurtleMD, AMS; AMS's constructor starts an
 `AMSWorker`, here once per move); and it hashes the constructors, not the
-helpers they call. Exit codes: 0 done, 3 stopped by a
-signal, 4 infretis refused to start. Logs: `gutsrun.log`; moves log to
+helpers they call. Exit codes: 0 done, 1 an error (traceback in
+`gutsrun.log` and on stderr), 3 stopped by a signal, 4 infretis refused to
+start. Logs: `gutsrun.log`; moves log to
 `worker{pin}.log` as before; per-move timings go to
 `gutsrun-timings.jsonl` (`bench/timings_summary.py` summarises them);
 the move time each stop lost goes to `gutsrun-stops.jsonl` (moves not yet
