@@ -87,10 +87,20 @@ def test_known_infretis_sources():
 def test_changed_infretis_source_refused(monkeypatch):
     from gutsrun_infretis import launcher
 
-    monkeypatch.setitem(launcher.KNOWN_SOURCES, "REPEX_state.write_toml", "0" * 16)
-    with pytest.raises(SystemExit, match="REPEX_state.write_toml"):
+    monkeypatch.setitem(launcher.KNOWN_SOURCES, "REPEX_state.treat_output", "0" * 16)
+    with pytest.raises(SystemExit, match="REPEX_state.treat_output"):
         launcher.check_infretis(allow_other=False)
     launcher.check_infretis(allow_other=True)  # warns in the log, runs
+
+
+def test_infretis_without_executor_hook_refused(monkeypatch):
+    """An infretis without the executor_factory hook cannot run, even with
+    --allow-other-infretis."""
+    from gutsrun_infretis import launcher
+
+    monkeypatch.setattr(launcher, "scheduler", lambda config: None)
+    with pytest.raises(SystemExit, match="no executor_factory hook"):
+        launcher.check_infretis(allow_other=True)
 
 
 def test_executor_takes_only_infretis_calls(tmp_path):

@@ -7,7 +7,7 @@ filelock==4.2.0
 fonttools==4.67.0
 GridDataFormats==1.2.0
 hyperqueue==0.26.2
-infretis @ git+https://github.com/infretis/infretis@a42e039ba49eaf3c2b4021d6298c15e55f389735
+infretis @ git+https://github.com/GUTSframework/infretis@5df681e4d8f3498686316f484eee8e789e73d033
 inftools @ git+https://github.com/infretis/inftools@ca33eae4258213f0cf526881918a643b8c5cc2ff
 iniconfig==2.3.1
 joblib==1.6.0

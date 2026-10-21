@@ -10,6 +10,12 @@ before its walltime, stops it cleanly, and the next link continues from
 You keep your infretis run directory as it is (`infretis.toml`, `load/`,
 the engine's inputs); the chain runs in it.
 
+It runs infretis from the [GUTS fork](https://github.com/GUTSframework/infretis)
+(branch `guts`): upstream infretis plus a few fixes that are offered
+upstream, among them restarts that continue the run's own random streams
+(upstream restarts from seed 0's) and an atomic `restart.toml`. Its
+results match upstream's for runs that are never restarted.
+
 Part of the GUTS Fast Track. For how it is built, tested and measured, see
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
@@ -38,7 +44,7 @@ one, so a broken run does not burn through its links.
 Once per cluster, on its login node, in a copy of this repository:
 
 ```bash
-scripts/setup-venv.sh       # .venv with infretis and gutsrun-infretis (see the script for clusters)
+scripts/setup-venv.sh       # .venv with infretis (the fork) and gutsrun-infretis (see the script for clusters)
 scripts/get-hq.sh           # the hq binary, into bin/
 ```
 

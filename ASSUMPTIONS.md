@@ -7,7 +7,7 @@ What this repo takes as given. If one turns out wrong, update this file
 
 | What | Pin | Why |
 |---|---|---|
-| infretis | git `a42e039` (main, 2026-05-26; reports version 2026.1.1) | PyPI 2026.1.1 and `main` differ in move physics; infentory installs from `main` (the code and the measurements name one version) |
+| infretis | GUTS fork, branch `guts`, git `5df681e`: upstream `a42e039` (main, 2026-05-26; reports version 2026.1.1) plus six fixes meant for upstream | PyPI 2026.1.1 and `main` differ in move physics; infentory installs from `main` (the code and the measurements name one version). The fixes: restarts from the run's seed, atomic `restart.toml`, no busy spin, an import-order bug, seeded ASE velocities, and the `executor_factory` hook the launcher needs |
 | inftools | git `ca33eae` (main, 2026-09-25) | `infinit`, WHAM analysis |
 | Python | 3.12 | infretis pins numpy < 2; numpy 1.26.4 has no 3.13 wheel |
 | numpy | 1.26.4 | from infretis (`^1.21.2`) |
@@ -29,7 +29,9 @@ Exact Python package versions: `requirements-lock.txt`.
   and long-running "warm" workers per pin are not planned.
 - `restart.toml` is the only restart authority: no HQ `--journal` for chained
   runs, a fresh `HQ_SERVER_DIR` per Slurm job.
-- No infretis fork: a launcher replaces `ProcessPoolExecutor` at run time.
+- infretis comes from the GUTS fork: upstream plus fixes offered upstream,
+  nothing gutsrun-specific. gutsrun-specific changes (graceful stop,
+  GROMACS input handling) stay in the launcher.
 - Tasks carry paths and indices, never data.
 - One node per MD move; HQ multi-node tasks are experimental.
 

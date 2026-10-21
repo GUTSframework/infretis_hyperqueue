@@ -1,22 +1,18 @@
-"""Run infretis with gutsrun instead of ProcessPoolExecutor, unforked.
+"""Run infretis with gutsrun instead of ProcessPoolExecutor.
 
     python -m gutsrun_infretis.launcher -i infretis.toml --backend local
     python -m gutsrun_infretis.launcher -i restart.toml --backend hq --cores-per-task 2
 
-Run it in the infretis run directory, like `infretisrun`. What it changes,
-for this run only (infretis itself stays unmodified):
+Run it in the infretis run directory, like `infretisrun`. It needs the
+infretis pinned in requirements.txt (the GUTS fork, branch `guts`): its
+`scheduler` takes an `executor_factory`, through which the launcher passes
+a factory that returns a gutsrun TaskExecutor. What it changes, for this
+run only:
 
-- `concurrent.futures.ProcessPoolExecutor` is replaced by a factory that
-  returns a gutsrun TaskExecutor. infretis looks it up at call time, so
-  no fork of infretis is needed.
-- `restart.toml` is written via temp + rename, and backed up and
-  parse-checked at start: infretis writes it in place, so a kill during
-  the write can leave a truncated file, the only one to restart from.
+- `restart.toml` is backed up and parse-checked at start.
 - SIGTERM/SIGINT wait out a running `treat_output` (which updates the
   paths and restart.toml together), then stop: in-flight moves are
   cancelled and redone after restart from their `locked` entry.
-- The parent's `as_completed` loop sleeps instead of spinning (infretis's
-  loop keeps a core 92 % busy).
 - Under HQ, `-pin`/`-pinoffset`/`-pinstride` are removed from `wmdrun`
   (HQ places tasks), and `-ntomp` must equal --cores-per-task (HQ sets
   OMP_NUM_THREADS to it; GROMACS aborts on a mismatch).
@@ -27,9 +23,9 @@ for this run only (infretis itself stays unmodified):
 - The infretis functions it copies or relies on are checked at start
   against their source at the tested commit (`KNOWN_SOURCES`); a
   mismatch stops the run unless --allow-other-infretis is given. Other
-  infretis commits with the same functions run fine. Of the engine
-  constructors, only GROMACS's and LAMMPS's are checked, for every run
-  (DEVELOPMENT.md lists the gaps).
+  infretis commits with the same functions and the `executor_factory`
+  hook run fine. Of the engine constructors, only GROMACS's and LAMMPS's
+  are checked, for every run (DEVELOPMENT.md lists the gaps).
 - `gutsrun-timings.jsonl`: per-move timings (see gutsrun.executor).
 - `gutsrun-stops.jsonl`: one line per stop by a signal, with the move time
   it lost: each move not yet through `treat_output` is redone after the
@@ -42,36 +38,9 @@ for this run only (infretis itself stays unmodified):
 Exit codes: 0 = all steps done, 3 = stopped by a signal (restart from
 restart.toml), 4 = infretis refused to start (the reason and what to do
 on stderr and in gutsrun.log), other = error.
-
-Parts of this file are adapted from infretis (https://github.com/infretis/infretis,
-commit a42e039; see PROVENANCE.md), which carries this licence:
-
-    MIT License
-
-    Copyright (c) 2022 infretis
-
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
-
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE.
 """
 
 import argparse
-import asyncio
-import concurrent.futures
 import hashlib
 import inspect
 import json
@@ -93,8 +62,6 @@ import gutsrun_infretis.worker  # noqa: F401  (imports infretis.setup first)
 
 # isort: split
 import tomli
-import tomli_w
-from infretis.asyncrunner import future_list
 from infretis.classes.repex import REPEX_state
 from infretis.scheduler import scheduler
 from infretis.setup import setup_config
@@ -102,16 +69,15 @@ from infretis.setup import setup_config
 from gutsrun import TaskExecutor
 from gutsrun.backends import Backend
 
-TESTED_COMMIT = "a42e039ba49eaf3c2b4021d6298c15e55f389735"
-# sha256 (first 16 hex) of inspect.getsource() at TESTED_COMMIT. The launcher
-# copies the first three and replaces the factory call in the fourth;
-# `worker.shared_gromacs_inputs_read_only` relies on what the fifth writes,
-# and on the sixth writing nothing (tasks rebuild the engines before each move).
+TESTED_COMMIT = "5df681e4d8f3498686316f484eee8e789e73d033"
+# sha256 (first 16 hex) of inspect.getsource() at TESTED_COMMIT. `worker.init`
+# is adapted from the first; GracefulStop relies on the second updating the
+# paths, the data file and restart.toml, the last of them last;
+# `worker.shared_gromacs_inputs_read_only` relies on what the third writes,
+# and on the fourth writing nothing (tasks rebuild the engines before each move).
 KNOWN_SOURCES = {
-    "REPEX_state.write_toml": "a3dbdbcc527c9c9d",
-    "future_list.as_completed": "987641bc2f36a670",
     "worker_initializer": "388c6696d0a234f3",
-    "aiorunner.__init__": "8f6009038fb50d42",
+    "REPEX_state.treat_output": "0179b3397870bee8",
     "GromacsEngine.__init__": "1d35532784876123",
     "LAMMPSEngine.__init__": "462b91ceb5005639",
 }
@@ -173,7 +139,8 @@ MOVES = Moves()
 def make_factory(make_backend: Callable[[int | None], Backend], spool_dir: str,
                  resource_dict: dict[str, Any],
                  timings_path: str | None = None) -> Callable[..., InfretisExecutor]:
-    """A stand-in for ProcessPoolExecutor that returns an InfretisExecutor."""
+    """infretis's `executor_factory`: takes ProcessPoolExecutor's arguments
+    and returns an InfretisExecutor."""
 
     def factory(max_workers: int | None = None, initializer: object = None,
                 initargs: tuple[Any, ...] = (), mp_context: object = None) -> InfretisExecutor:
@@ -203,15 +170,13 @@ def infretis_commit() -> str | None:
 
 def changed_sources() -> list[str]:
     """Names in KNOWN_SOURCES whose infretis source differs from the tested one."""
-    from infretis.asyncrunner import aiorunner, worker_initializer
+    from infretis.asyncrunner import worker_initializer
     from infretis.classes.engines.gromacs import GromacsEngine
     from infretis.classes.engines.lammps import LAMMPSEngine
 
     objects = {
-        "REPEX_state.write_toml": REPEX_state.write_toml,
-        "future_list.as_completed": future_list.as_completed,
         "worker_initializer": worker_initializer,
-        "aiorunner.__init__": aiorunner.__init__,
+        "REPEX_state.treat_output": REPEX_state.treat_output,
         "GromacsEngine.__init__": GromacsEngine.__init__,
         "LAMMPSEngine.__init__": LAMMPSEngine.__init__,
     }
@@ -221,9 +186,14 @@ def changed_sources() -> list[str]:
 
 
 def check_infretis(allow_other: bool) -> None:
-    """Exit if a function the launcher relies on differs from the tested
-    one, unless `allow_other`."""
+    """Exit if infretis has no `executor_factory` hook, or if a function the
+    launcher relies on differs from the tested one, unless `allow_other`."""
     commit = infretis_commit()
+    if "executor_factory" not in inspect.signature(scheduler).parameters:
+        sys.exit(f"infretis {commit or '(unknown version)'} has no executor_factory "
+                 f"hook. Install the infretis pinned in requirements.txt "
+                 f"({TESTED_COMMIT[:7]}); in an existing .venv, pip keeps the old "
+                 "one because the version number is the same: add --force-reinstall.")
     changed = changed_sources()
     log.info("infretis commit %s (tested: %s); changed functions: %s",
              commit, TESTED_COMMIT, changed or "none")
@@ -232,37 +202,6 @@ def check_infretis(allow_other: bool) -> None:
                  f"{TESTED_COMMIT[:7]} in functions the launcher copies or relies on: "
                  f"{', '.join(changed)}. Check src/gutsrun_infretis/launcher.py against "
                  "them, or pass --allow-other-infretis to run anyway.")
-
-
-def write_toml_atomic(self: REPEX_state) -> None:
-    """REPEX_state.write_toml at a42e039 (repex.py:764), with temp + rename."""
-    self.config["current"]["active"] = self.live_paths()
-    locked_ep = []
-    for tup in self.locked:
-        locked_ep.append(([int(tup0 + self._offset) for tup0 in tup[0]], tup[1]))
-    self.config["current"]["locked"] = locked_ep
-    self.config["current"]["rng_state"] = self.rgen.bit_generator.state
-    self.config["current"]["frac"] = {}
-    for key in sorted(self.traj_data.keys()):
-        fracs = [str(i) for i in self.traj_data[key]["frac"]]
-        self.config["current"]["frac"][str(key)] = fracs
-    with open("./.restart.toml.tmp", "wb") as f:
-        tomli_w.dump(self.config, f)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace("./.restart.toml.tmp", "./restart.toml")
-
-
-def as_completed_sleeping(self: future_list,
-                          interval: float = 0.005) -> asyncio.Future[Any] | None:
-    """future_list.as_completed (asyncrunner.py:243) without the busy spin."""
-    while self._futures:
-        for fut in list(self._futures):
-            if fut.done():
-                self._futures.remove(fut)
-                return fut
-        time.sleep(interval)
-    return None
 
 
 class GracefulStop:
@@ -428,10 +367,8 @@ def main(argv: list[str] | None = None) -> int:
     make_backend = local_backend if args.backend == "local" else hq_backend
 
     resources = {"cores": args.cores_per_task, "cwd": os.getcwd()}
-    concurrent.futures.ProcessPoolExecutor = make_factory(
-        make_backend, args.spool, resources, timings_path="gutsrun-timings.jsonl")
-    REPEX_state.write_toml = write_toml_atomic
-    future_list.as_completed = as_completed_sleeping
+    factory = make_factory(make_backend, args.spool, resources,
+                           timings_path="gutsrun-timings.jsonl")
     stop = GracefulStop()
     stop.install()
 
@@ -445,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.backend == "hq" and "wmdrun" in config["runner"]:
             config["runner"]["wmdrun"] = strip_pinning(config["runner"]["wmdrun"],
                                                        args.cores_per_task)
-        scheduler(config)
+        scheduler(config, executor_factory=factory)
         return EXIT_DONE
     except Stop as s:
         report_lost(str(s), args.cores_per_task)

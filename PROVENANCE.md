@@ -23,8 +23,6 @@ infretis commit `a42e039`, licence: MIT, "Copyright (c) 2022 infretis".
 
 | Here | Derived from | How |
 |---|---|---|
-| `launcher.write_toml_atomic` | `REPEX_state.write_toml`, `infretis/classes/repex.py:764-782` | body copied, write changed to temp + rename |
-| `launcher.as_completed_sleeping` | `future_list.as_completed`, `infretis/asyncrunner.py:243-256` | same logic, plus a sleep |
 | `worker.init`, `worker.run_move` | `worker_initializer`, `infretis/asyncrunner.py:210-230` | engine set-up calls and log handler set-up, split in two |
 
 `bench/cold_start.py` and `bench/hq_dispatch.py` call the same infretis
@@ -33,7 +31,9 @@ code).
 
 MIT allows this under any outbound licence, open or closed, as long as
 the infretis copyright and permission notice travels with the derived
-code. Both files carry it in their header.
+code. `worker.py` carries it in its header. The fixes we needed in
+infretis itself are in the GUTS fork (github.com/GUTSframework/infretis,
+branch `guts`), a dependency, not copied here.
 
 ## infentory-derived files (no licence)
 

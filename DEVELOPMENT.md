@@ -25,7 +25,7 @@ How this repo maps onto the GUTSnotes design:
 ```
 Slurm job ──▶ HQ server + HQ workers ──▶ one HQ task per MC move
                     ▲
-infretis MC loop ── HQExecutor (replaces ProcessPoolExecutor)
+infretis MC loop ── HQExecutor (via infretis's executor_factory)
 ```
 
 The HPC part (`src/gutsrun/`) is generic and knows nothing about MD; it is
@@ -111,20 +111,24 @@ HQ_SERVER_DIR=... .venv/bin/python -m gutsrun_infretis.launcher \
 ```
 
 or `bench/bare_run.py ... --runner gutsrun [--backend hq]`. The launcher
-swaps in `TaskExecutor` (infretis unforked) and fixes, for this run only:
-atomic `restart.toml` + backup at start, graceful SIGTERM/SIGINT (waits
-out `treat_output`), no busy spin in the parent (92 % → 2 % of a core),
-`wmdrun` pinning flags stripped under HQ, `-ntomp` checked against
+passes infretis a `TaskExecutor` factory (`executor_factory`, a hook in the
+GUTS fork, `requirements.txt`) and adds, for this run only: a
+`restart.toml` backup at start, graceful SIGTERM/SIGINT (waits out
+`treat_output`), `wmdrun` pinning flags stripped under HQ, `-ntomp` checked against
 `--cores-per-task`, and tasks that leave the shared GROMACS inputs alone
 (each task builds its engines, while other moves read
 `gromacs_input/infretis.mdp`). A task instead checks that mdp against its
 engine settings and stops the run if it differs: it was edited during the
 run, or two engines with different settings share one `input_path` (in
 plain infretis the engine built last silently sets the mdp for all of
-them). At start it checks the source of the six
-infretis functions it copies or relies on against the tested commit (`a42e039`);
-other infretis versions run if those are unchanged, otherwise it stops
-(`--allow-other-infretis` overrides). Two of the six are engine
+them). At start it refuses an infretis without the `executor_factory`
+hook, and checks the source of the four infretis functions it copies or
+relies on (`worker_initializer`, `REPEX_state.treat_output` and two engine
+constructors) against the tested commit (the fork's `5df681e`); other
+infretis versions run if those are unchanged, otherwise it stops
+(`--allow-other-infretis` overrides). The fork's fixes (atomic
+`restart.toml`, no busy spin in the parent, restarts from the run's seed)
+apply to bare runs too. Two of the four are engine
 constructors, which a task runs before every move (infretis runs them
 once per worker): GROMACS's and LAMMPS's, both read at the tested commit.
 The check has gaps: it covers both whichever engine a run uses, so a
