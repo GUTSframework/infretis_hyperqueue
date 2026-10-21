@@ -40,7 +40,7 @@ class BenchRun(InfretisRun):
         return self.runner == "gutsrun"
 
     def before_link(self, rundir: Path, link: int) -> None:
-        # Bare infretis writes restart.toml in place, so a kill can truncate it.
+        # A copy per link: the state each link started from, for comparisons.
         # None yet if the run was stopped before its first step.
         if (rundir / "restart.toml").exists():
             shutil.copy2(rundir / "restart.toml", rundir / f"restart.toml.link{link}")
