@@ -20,9 +20,9 @@ class Resources:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None, default: "Resources") -> "Resources":
-        """`default`, with the keys in `d` replaced (`env` is merged)."""
-        if not d:
-            return default
+        """A copy of `default`, with the keys in `d` replaced (`env` is
+        merged). Never `default` itself: callers change what they get."""
+        d = d or {}
         unknown = set(d) - {"cores", "gpus", "cwd", "env"}
         if unknown:
             raise ValueError(f"unknown resource keys: {sorted(unknown)}")

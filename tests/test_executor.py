@@ -12,6 +12,7 @@ import pytest
 from conftest import wait_for
 
 from gutsrun import RemoteTraceback, TaskFailed, spool
+from gutsrun.backends import Resources
 
 
 def test_happy_path(make_executor):
@@ -52,6 +53,26 @@ def test_resources_cwd_env_threads(make_executor, tmp_path):
     assert ex.submit(helpers.env, "OMP_NUM_THREADS", resource_dict=rd).result(timeout=60) == "2"
     assert ex.submit(helpers.cwd, resource_dict=rd).result(timeout=60) == str(tmp_path)
     assert ex.submit(helpers.env, "GUTSRUN_TEST", resource_dict=rd).result(timeout=60) == "yes"
+
+
+def test_task_environment_does_not_grow(make_executor):
+    """Each task gets gutsrun's src on PYTHONPATH, without adding it to the
+    executor's defaults: grown once per task, it would pass Linux's 128 KiB
+    limit for one environment string (E2BIG) after a few thousand tasks."""
+    ex = make_executor()
+    default_env = dict(ex.default_resources.env)
+    paths = [ex.submit(helpers.env, "PYTHONPATH").result(timeout=60) for _ in range(3)]
+    assert paths[0] == paths[1] == paths[2]
+    assert ex.default_resources.env == default_env
+
+
+def test_resources_from_dict_never_returns_the_default():
+    default = Resources(env={"A": "1"})
+    for d in (None, {}, {"cores": 2}):
+        res = Resources.from_dict(d, default)
+        res.env["B"] = "2"
+        assert res is not default
+        assert default.env == {"A": "1"}
 
 
 def test_broken_task_fails_future(make_executor):
