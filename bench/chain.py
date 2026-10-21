@@ -70,6 +70,8 @@ def main() -> None:
                         "1, fewer moves fit on one node and the rest go to the others")
     p.add_argument("--name", help="run name (default: <date>-<case>-<runner>)")
     p.add_argument("--site", default="das6")
+    p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                   help="config override as in bench/bare_run.py, e.g. output.delete_old=true")
     p.add_argument("--night", action="store_true",
                    help="allow a walltime beyond the site's daytime limit")
     p.add_argument("--no-submit", action="store_true",
@@ -93,7 +95,7 @@ def main() -> None:
         rundir.parent.mkdir(parents=True, exist_ok=True)
         bare_run.prepare(argparse.Namespace(
             example=Path(example), rundir=rundir, workers=args.workers, steps=args.steps,
-            seed=None, wmdrun=None, cores_per_worker=1, set=[]))
+            seed=None, wmdrun=None, cores_per_worker=1, set=args.set))
         print(start(spec, night=args.night, submit_first=not args.no_submit))
     except (ChainError, StateError) as e:
         sys.exit(str(e))
