@@ -115,8 +115,14 @@ swaps in `TaskExecutor` (infretis unforked) and fixes, for this run only:
 atomic `restart.toml` + backup at start, graceful SIGTERM/SIGINT (waits
 out `treat_output`), no busy spin in the parent (92 % → 2 % of a core),
 `wmdrun` pinning flags stripped under HQ, `-ntomp` checked against
-`--cores-per-task`. At start it checks the source of the four infretis
-functions it copies or relies on against the tested commit (`a42e039`);
+`--cores-per-task`, and tasks that leave the shared GROMACS inputs alone
+(each task builds its engines, while other moves read
+`gromacs_input/infretis.mdp`). A task instead checks that mdp against its
+engine settings and stops the run if it differs: it was edited during the
+run, or two engines with different settings share one `input_path` (in
+plain infretis the engine built last silently sets the mdp for all of
+them). At start it checks the source of the five
+infretis functions it copies or relies on against the tested commit (`a42e039`);
 other infretis versions run if those are unchanged, otherwise it stops
 (`--allow-other-infretis` overrides). Exit codes: 0 done, 3 stopped by a
 signal, 4 infretis refused to start. Logs: `gutsrun.log`; moves log to

@@ -20,6 +20,10 @@ for this run only (infretis itself stays unmodified):
 - Under HQ, `-pin`/`-pinoffset`/`-pinstride` are removed from `wmdrun`
   (HQ places tasks), and `-ntomp` must equal --cores-per-task (HQ sets
   OMP_NUM_THREADS to it; GROMACS aborts on a mismatch).
+- Tasks build their engines without rewriting the shared GROMACS inputs
+  (`worker.shared_gromacs_inputs_read_only`): infretis builds them once
+  per pool worker, gutsrun once per move, and other moves read them. A
+  task whose settings no longer match the mdp stops the run.
 - The infretis functions it copies or relies on are checked at start
   against their source at the tested commit (`KNOWN_SOURCES`); a
   mismatch stops the run unless --allow-other-infretis is given. Other
@@ -98,12 +102,14 @@ from gutsrun.backends import Backend
 
 TESTED_COMMIT = "a42e039ba49eaf3c2b4021d6298c15e55f389735"
 # sha256 (first 16 hex) of inspect.getsource() at TESTED_COMMIT. The launcher
-# copies the first three and replaces the factory call in the fourth.
+# copies the first three and replaces the factory call in the fourth;
+# `worker.shared_gromacs_inputs_read_only` relies on what the fifth writes.
 KNOWN_SOURCES = {
     "REPEX_state.write_toml": "a3dbdbcc527c9c9d",
     "future_list.as_completed": "987641bc2f36a670",
     "worker_initializer": "388c6696d0a234f3",
     "aiorunner.__init__": "8f6009038fb50d42",
+    "GromacsEngine.__init__": "1d35532784876123",
 }
 # Test hook: seconds to hold inside treat_output after touching
 # `treat_output.entered`, so a test can signal at exactly that point.
@@ -194,12 +200,14 @@ def infretis_commit() -> str | None:
 def changed_sources() -> list[str]:
     """Names in KNOWN_SOURCES whose infretis source differs from the tested one."""
     from infretis.asyncrunner import aiorunner, worker_initializer
+    from infretis.classes.engines.gromacs import GromacsEngine
 
     objects = {
         "REPEX_state.write_toml": REPEX_state.write_toml,
         "future_list.as_completed": future_list.as_completed,
         "worker_initializer": worker_initializer,
         "aiorunner.__init__": aiorunner.__init__,
+        "GromacsEngine.__init__": GromacsEngine.__init__,
     }
     return [name for name, obj in objects.items()
             if hashlib.sha256(inspect.getsource(obj).encode()).hexdigest()[:16]

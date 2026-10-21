@@ -278,3 +278,71 @@ def test_relaunched_finished_run_refused_with_a_way_out(tmp_path):
     assert proc.returncode == EXIT_DONE, out
     nums = path_numbers(rd)
     assert len(nums) == len(set(nums)), "duplicate path numbers after restart"
+
+
+GROMACS_ENGINE = {"gmx": "gmx-must-not-run", "timestep": 0.002, "subcycles": 1000,
+                  "temperature": 573.15}
+
+
+def gromacs_input(tmp_path):
+    """water_boiling's inputs: they include `conf.g96`, which the engine reads."""
+    inp = tmp_path / "gromacs_input"
+    shutil.copytree(ROOT / "examples" / "water_boiling" / "gromacs_input", inp)
+    return inp
+
+
+def parent_writes_mdp(inp, monkeypatch, **settings):
+    """`infretis.mdp` as infretis's setup writes it in the parent (minus
+    grompp, as `gmx` is not callable here)."""
+    from infretis.classes.engines.gromacs import GromacsEngine
+
+    with monkeypatch.context() as m:
+        m.setattr(GromacsEngine, "_execute_grompp",
+                  lambda self, mdp, conf, deffnm: {"tpr": f"{deffnm}.tpr", "mdout": "mdout.mdp"})
+        GromacsEngine(input_path=str(inp), **{**GROMACS_ENGINE, **settings})
+    return inp / "infretis.mdp"
+
+
+def snapshot(directory):
+    return {p.name: (p.stat().st_ino, p.stat().st_mtime_ns, p.read_bytes())
+            for p in directory.iterdir()}
+
+
+def test_task_engine_leaves_the_gromacs_inputs_alone(tmp_path, monkeypatch):
+    """A task builds its GROMACS engine without grompp and without writing
+    anything to the input directory that other moves read."""
+    from infretis.classes.engines.gromacs import GromacsEngine
+
+    from gutsrun_infretis.worker import shared_gromacs_inputs_read_only
+
+    inp = gromacs_input(tmp_path)
+    assert "ref-t = 573.15" in parent_writes_mdp(inp, monkeypatch).read_text()
+    before = snapshot(inp)
+    grompp = GromacsEngine._execute_grompp
+    with shared_gromacs_inputs_read_only():
+        GromacsEngine(input_path=str(inp), **GROMACS_ENGINE)
+    assert snapshot(inp) == before
+    assert GromacsEngine._execute_grompp is grompp
+    assert "_modify_input" not in GromacsEngine.__dict__
+
+
+@pytest.mark.parametrize("change", ["edited", "other engine", "missing"])
+def test_task_engine_stops_on_a_changed_gromacs_mdp(tmp_path, monkeypatch, change):
+    from infretis.classes.engines.gromacs import GromacsEngine
+
+    from gutsrun_infretis.worker import SharedInputChanged, shared_gromacs_inputs_read_only
+
+    inp = gromacs_input(tmp_path)
+    mdp = parent_writes_mdp(inp, monkeypatch)
+    if change == "edited":
+        mdp.write_text(mdp.read_text().replace("573.15", "300"))
+    elif change == "other engine":  # built last in the parent, so its mdp is on disk
+        parent_writes_mdp(inp, monkeypatch, temperature=300)
+    else:
+        mdp.unlink()
+    before = snapshot(inp)
+    with pytest.raises(SharedInputChanged, match="infretis.mdp"):
+        with shared_gromacs_inputs_read_only():
+            GromacsEngine(input_path=str(inp), **GROMACS_ENGINE)
+    assert snapshot(inp) == before
+    assert "_modify_input" not in GromacsEngine.__dict__
