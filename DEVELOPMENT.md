@@ -121,10 +121,17 @@ out `treat_output`), no busy spin in the parent (92 % → 2 % of a core),
 engine settings and stops the run if it differs: it was edited during the
 run, or two engines with different settings share one `input_path` (in
 plain infretis the engine built last silently sets the mdp for all of
-them). At start it checks the source of the five
+them). At start it checks the source of the six
 infretis functions it copies or relies on against the tested commit (`a42e039`);
 other infretis versions run if those are unchanged, otherwise it stops
-(`--allow-other-infretis` overrides). Exit codes: 0 done, 3 stopped by a
+(`--allow-other-infretis` overrides). Two of the six are engine
+constructors, which a task runs before every move (infretis runs them
+once per worker): GROMACS's and LAMMPS's, both read at the tested commit.
+The check has gaps: it covers both whichever engine a run uses, so a
+change to one stops runs of the other; it does not cover the other
+engines (ASE, CP2K, TurtleMD, AMS; AMS's constructor starts an
+`AMSWorker`, here once per move); and it hashes the constructors, not the
+helpers they call. Exit codes: 0 done, 3 stopped by a
 signal, 4 infretis refused to start. Logs: `gutsrun.log`; moves log to
 `worker{pin}.log` as before; per-move timings go to
 `gutsrun-timings.jsonl` (`bench/timings_summary.py` summarises them);

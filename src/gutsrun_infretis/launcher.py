@@ -27,7 +27,9 @@ for this run only (infretis itself stays unmodified):
 - The infretis functions it copies or relies on are checked at start
   against their source at the tested commit (`KNOWN_SOURCES`); a
   mismatch stops the run unless --allow-other-infretis is given. Other
-  infretis commits with the same functions run fine.
+  infretis commits with the same functions run fine. Of the engine
+  constructors, only GROMACS's and LAMMPS's are checked, for every run
+  (DEVELOPMENT.md lists the gaps).
 - `gutsrun-timings.jsonl`: per-move timings (see gutsrun.executor).
 - `gutsrun-stops.jsonl`: one line per stop by a signal, with the move time
   it lost: each move not yet through `treat_output` is redone after the
@@ -103,13 +105,15 @@ from gutsrun.backends import Backend
 TESTED_COMMIT = "a42e039ba49eaf3c2b4021d6298c15e55f389735"
 # sha256 (first 16 hex) of inspect.getsource() at TESTED_COMMIT. The launcher
 # copies the first three and replaces the factory call in the fourth;
-# `worker.shared_gromacs_inputs_read_only` relies on what the fifth writes.
+# `worker.shared_gromacs_inputs_read_only` relies on what the fifth writes,
+# and on the sixth writing nothing (tasks rebuild the engines before each move).
 KNOWN_SOURCES = {
     "REPEX_state.write_toml": "a3dbdbcc527c9c9d",
     "future_list.as_completed": "987641bc2f36a670",
     "worker_initializer": "388c6696d0a234f3",
     "aiorunner.__init__": "8f6009038fb50d42",
     "GromacsEngine.__init__": "1d35532784876123",
+    "LAMMPSEngine.__init__": "462b91ceb5005639",
 }
 # Test hook: seconds to hold inside treat_output after touching
 # `treat_output.entered`, so a test can signal at exactly that point.
@@ -201,6 +205,7 @@ def changed_sources() -> list[str]:
     """Names in KNOWN_SOURCES whose infretis source differs from the tested one."""
     from infretis.asyncrunner import aiorunner, worker_initializer
     from infretis.classes.engines.gromacs import GromacsEngine
+    from infretis.classes.engines.lammps import LAMMPSEngine
 
     objects = {
         "REPEX_state.write_toml": REPEX_state.write_toml,
@@ -208,6 +213,7 @@ def changed_sources() -> list[str]:
         "worker_initializer": worker_initializer,
         "aiorunner.__init__": aiorunner.__init__,
         "GromacsEngine.__init__": GromacsEngine.__init__,
+        "LAMMPSEngine.__init__": LAMMPSEngine.__init__,
     }
     return [name for name, obj in objects.items()
             if hashlib.sha256(inspect.getsource(obj).encode()).hexdigest()[:16]
