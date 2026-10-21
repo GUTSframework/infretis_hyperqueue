@@ -13,8 +13,8 @@ What this repo takes as given. If one turns out wrong, update this file
 | numpy | 1.26.4 | from infretis (`^1.21.2`) |
 | HQ | 0.26.2, binary and PyPI client | measured in `../hyperqueue_test`; client and server must match. Before moving to 0.27.x, rerun the 1024-task autoalloc regression check |
 | nixpkgs | `151fa4e` (same lock as `../hyperqueue_test`) | |
-| GROMACS | 2026.3 (nixpkgs) | laptop only; clusters use their own module |
-| LAMMPS | 22Jul2025_update4 (nixpkgs), REAXFF + QEQ enabled | water_dissociation |
+| GROMACS | 2026.3 (nixpkgs; conda-forge on DAS-6) | production clusters use their own module |
+| LAMMPS | 22Jul2025_update4 (nixpkgs), update6 (conda-forge on DAS-6), REAXFF + QEQ enabled | water_dissociation |
 
 Exact Python package versions: `requirements-lock.txt`.
 
@@ -62,9 +62,13 @@ its admins.
 - Node-local disk at `/local` (NVMe); shared scratch at `/var/scratch/$USER`
   (40 GB quota); `/home` has a 5 GB quota.
 - The soft limit on open files in a job is 1024 (hard: 131072).
-- No GROMACS or LAMMPS from the site; users install software themselves
-  (e.g. conda-forge GROMACS, fine for testing). No `[environment] setup`
-  in `sites/das6.toml` until an engine is installed.
+- No GROMACS or LAMMPS from the site; users install software themselves.
+  `scripts/das6/install-engines.sh` installs conda-forge's builds (CPU,
+  no MPI; the laptop's versions) in `/var/scratch/$USER/miniforge3`:
+  about 44k inodes and 1.2 GB. `/home` and `/var/scratch` have no file
+  limit (`quota` shows 0). conda-forge's `gmx` picks AVX2_256 on AMD
+  EPYC; production clusters use their own optimised builds, so DAS-6
+  move times show plumbing, not production speed.
 - Every `defq` node has at least one GPU (A2 to A100, per `sinfo`); GPU
   jobs are untested.
 

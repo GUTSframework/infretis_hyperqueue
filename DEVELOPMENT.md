@@ -43,7 +43,8 @@ scripts/get-hq.sh       pinned hq binary into ./bin, for clusters without Nix
 scripts/setup-venv.sh   .venv from the lock file, plus this checkout (editable)
 scripts/sync.sh         rsync the repo to a login node, pull runs/<site>/ back
 scripts/wait-jobs.sh    poll a login node's squeue until jobs finish, optionally pull
-scripts/das6/           DAS-6 probes: login node (read-only), one-node and two-node jobs
+scripts/das6/           DAS-6 probes (login node read-only, one-node and two-node jobs);
+                        install-engines.sh (GROMACS, LAMMPS from conda-forge)
 sites/                  one file per cluster; template.toml documents every key
 ASSUMPTIONS.md          version pins and cluster assumptions
 PROVENANCE.md           where each file comes from, and under which terms

@@ -17,3 +17,9 @@ local_disk = "/local"
 # The venv is on /home (NFS). Measured: 0.15-0.3 s faster per task start,
 # for 2 s of unpacking per job.
 local_venv = true
+
+[environment]
+# DAS-6 provides no MD engines; scripts/das6/install-engines.sh installs
+# conda-forge GROMACS and LAMMPS in /var/scratch. Only their gmx and lmp
+# are put on PATH, not the conda env's python3.
+setup = 'export PATH="/var/scratch/$USER/miniforge3/md-bin:$PATH"'
