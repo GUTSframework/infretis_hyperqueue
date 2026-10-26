@@ -7,9 +7,8 @@ Where the files in this repo come from, and under which terms. Checked
 
 | Origin | Files | Terms |
 |---|---|---|
-| Written for this repo | `src/gutsrun/`, `tests/`, `bench/`, `scripts/setup-venv.sh`, `examples/puckering/prepare.sh` + `assemble.py`, `examples/README.md`, docs | ours (licence to choose) |
+| Written for this repo | `src/gutsrun/`, `src/gutsrun_infretis/`, `tests/`, `bench/`, `scripts/setup-venv.sh`, `examples/puckering/prepare.sh` + `assemble.py`, `examples/README.md`, docs | ours (licence to choose) |
 | `../hyperqueue_test` (same author, unlicensed) | `flake.nix`, `flake.lock`, `scripts/get-hq.sh` | ours (same copyright holder) |
-| **infretis** (MIT, © 2022 infretis) | adapted snippets in `src/gutsrun_infretis/` (below) | MIT: keep the copyright and permission notice |
 | **infentory** (public, **no licence**) | everything under `examples/` except the files listed as ours | **all rights reserved** by default |
 | Generated | `requirements-lock.txt`, `examples/water_boiling/gromacs_input/conf.g96` (from infentory's `conf.gro` via `gmx editconf`, so infentory data) | as their source |
 
@@ -17,19 +16,11 @@ Not copied (used as dependencies or by reference only): HyperQueue (MIT),
 GROMACS force fields (`#include`d from the GROMACS installation), LAMMPS,
 ASE, gutscore (nothing taken), aimmd/asyncmd (nothing taken).
 
-## infretis-derived code (MIT)
+## infretis (MIT)
 
-infretis commit `a42e039`, licence: MIT, "Copyright (c) 2022 infretis".
-
-| Here | Derived from | How |
-|---|---|---|
-| `worker.init`, `worker.run_move` | `worker_initializer`, `infretis/asyncrunner.py:210-230` | engine set-up calls and log handler set-up, split in two |
-
-MIT allows this under any outbound licence, open or closed, as long as
-the infretis copyright and permission notice travels with the derived
-code. `worker.py` carries it in its header. The fixes we needed in
-infretis itself are in the GUTS fork (github.com/GUTSframework/infretis,
-branch `guts`), a dependency, not copied here.
+No infretis code is copied here. The fixes and hooks we need are in the
+GUTS fork (github.com/GUTSframework/infretis, branch `guts`), a
+dependency installed from `requirements.txt`.
 
 ## infentory-derived files (no licence)
 

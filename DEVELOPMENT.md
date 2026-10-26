@@ -79,8 +79,7 @@ was given (dotted arrow).
 flowchart TB
     subgraph adapter["gutsrun_infretis: adapter"]
         ichain["chain.py<br/>InfretisRun workload,<br/>gutsrun-infretis command"]
-        launcher["launcher.py<br/>executor factory, GracefulStop,<br/>source checks"]
-        worker["worker.py<br/>init and run_move: the task side"]
+        launcher["launcher.py<br/>executor factory, checks,<br/>exit codes"]
     end
     subgraph generic["gutsrun: generic, no MD"]
         gchain["chain.py<br/>chain of links, workloads"]
@@ -92,7 +91,7 @@ flowchart TB
         backends["backends/<br/>local.py, hq.py"]
     end
     subgraph infretis["infretis, GUTS fork"]
-        sched["scheduler, asyncrunner<br/>executor_factory hook"]
+        sched["scheduler, asyncrunner<br/>executor_factory hook, graceful stop"]
         repex["REPEX_state<br/>pick, treat_output, restart.toml"]
         engines["core.tis.run_md, engines"]
     end
@@ -139,7 +138,7 @@ sequenceDiagram
     X->>H: one job, one program task:<br/>python -m gutsrun.task {dir} {tid}
     H->>T: starts it on a worker, with its cores
     T->>S: read in/{tid}.pkl
-    T->>T: worker.init: build the engines<br/>run_move: run_md, which runs lmp or gmx
+    T->>T: worker_initializer: build the engines<br/>run_md: logs to worker{pin}.log, runs lmp or gmx
     T->>S: out/{tid}.{instance}.pkl (temp file, rename)
     loop every 20 ms
         X->>S: list out/
@@ -227,32 +226,23 @@ HQ_SERVER_DIR=... .venv/bin/python -m gutsrun_infretis.launcher \
 
 or `bench/bare_run.py ... --runner gutsrun [--backend hq]`. The launcher
 passes infretis a `TaskExecutor` factory (`executor_factory`, a hook in the
-GUTS fork, `requirements.txt`) and adds, for this run only: a
-`restart.toml` backup at start, graceful SIGTERM/SIGINT (waits out
-`treat_output`), `wmdrun` pinning flags stripped under HQ, `-ntomp` checked against
-`--cores-per-task`, and tasks that leave the shared GROMACS inputs alone
-(each task builds its engines, while other moves read
-`gromacs_input/infretis.mdp`). A task instead checks that mdp against its
-engine settings and stops the run if it differs: it was edited during the
-run, or two engines with different settings share one `input_path` (in
-plain infretis the engine built last silently sets the mdp for all of
-them). At start it refuses an infretis without the `executor_factory`
-hook, and checks the source of the four infretis functions it copies or
-relies on (`worker_initializer`, `REPEX_state.treat_output` and two engine
-constructors) against the tested commit (the fork's `5df681e`); other
-infretis versions run if those are unchanged, otherwise it stops
-(`--allow-other-infretis` overrides). The fork's fixes (atomic
-`restart.toml`, no busy spin in the parent, restarts from the run's seed)
-apply to bare runs too. Two of the four are engine
-constructors, which a task runs before every move (infretis runs them
-once per worker): GROMACS's and LAMMPS's, both read at the tested commit.
-The check has gaps: it covers both whichever engine a run uses, so a
-change to one stops runs of the other; it does not cover the other
-engines (ASE, CP2K, TurtleMD, AMS; AMS's constructor starts an
-`AMSWorker`, here once per move); and it hashes the constructors, not the
-helpers they call. Exit codes: 0 done, 1 an error (traceback in
-`gutsrun.log` and on stderr), 3 stopped by a signal, 4 infretis refused to
-start. Logs: `gutsrun.log`; moves log to `worker{pin}.log` as before.
+GUTS fork, `requirements.txt`), which runs infretis's own worker
+initializer before every move. The fork does what used to be patched in
+here: the initializer needs no shared state, each move logs to
+`worker{pin}.log`, the workers leave the shared GROMACS inputs alone (the
+parent writes them once at setup, and refuses engines that share an
+`input_path` with different settings), infretis stops gracefully on
+SIGTERM/SIGINT (after the result it is recording, `restart.toml` last),
+and a refused setup logs why. The launcher adds, for this run only: a
+`restart.toml` backup at start, `wmdrun` pinning flags stripped under HQ,
+and `-ntomp` checked against `--cores-per-task`. At start it refuses an
+infretis without the `executor_factory` hook or the graceful stop. The
+fork's other fixes (atomic `restart.toml`, no busy spin in the parent,
+restarts from the run's seed) apply to bare runs too. Exit codes: 0 done
+(or nothing to do), 1 an error (traceback in `gutsrun.log` and on
+stderr), 3 stopped by a signal, 4 infretis refused to start (its reason
+on stderr). Logs: `gutsrun.log`; moves log to `worker{pin}.log`, as
+under plain infretis.
 
 ## Chains
 

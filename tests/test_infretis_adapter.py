@@ -5,7 +5,6 @@ libraries). The `slow` exact check runs LAMMPS (~3 min); run it with
 `pytest -m slow`.
 """
 
-import ast
 import json
 import os
 import shutil
@@ -21,14 +20,9 @@ pytest.importorskip("infretis.setup", exc_type=ImportError)
 
 from conftest import wait_for  # noqa: E402
 
-from gutsrun.backends.local import LocalBackend  # noqa: E402
 from gutsrun_infretis.launcher import (  # noqa: E402
     EXIT_DONE,
-    EXIT_REFUSED,
     EXIT_STOPPED,
-    HOLD_ENV,
-    InfretisExecutor,
-    changed_sources,
     strip_pinning,
 )
 
@@ -79,37 +73,14 @@ def test_strip_pinning():
         strip_pinning(cmds, 4)
 
 
-def test_known_infretis_sources():
-    """The installed infretis has the functions the launcher was written for."""
-    assert changed_sources() == []
-
-
-def test_changed_infretis_source_refused(monkeypatch):
-    from gutsrun_infretis import launcher
-
-    monkeypatch.setitem(launcher.KNOWN_SOURCES, "REPEX_state.treat_output", "0" * 16)
-    with pytest.raises(SystemExit, match="REPEX_state.treat_output"):
-        launcher.check_infretis(allow_other=False)
-    launcher.check_infretis(allow_other=True)  # warns in the log, runs
-
-
 def test_infretis_without_executor_hook_refused(monkeypatch):
-    """An infretis without the executor_factory hook cannot run, even with
-    --allow-other-infretis."""
+    """An infretis without the executor_factory hook cannot run."""
     from gutsrun_infretis import launcher
 
+    launcher.check_infretis()  # the pinned one passes
     monkeypatch.setattr(launcher, "scheduler", lambda config: None)
-    with pytest.raises(SystemExit, match="no executor_factory hook"):
-        launcher.check_infretis(allow_other=True)
-
-
-def test_executor_takes_only_infretis_calls(tmp_path):
-    ex = InfretisExecutor(LocalBackend(1), tmp_path / "spool")
-    try:
-        with pytest.raises(TypeError):
-            ex.submit(print, "x")
-    finally:
-        ex.shutdown()
+    with pytest.raises(SystemExit, match="lacks the executor_factory hook"):
+        launcher.check_infretis()
 
 
 def test_2d_potential_run(tmp_path):
@@ -140,30 +111,6 @@ def test_sigterm_then_restart(tmp_path):
     assert len(nums) == len(set(nums)), "duplicate path numbers after restart"
 
 
-def test_sigterm_inside_treat_output(tmp_path):
-    """Deterministic version of the stop drill: the signal arrives while
-    treat_output runs (held there by a test hook). The launcher must finish
-    it, write restart.toml, and stop; a restart then completes cleanly."""
-    rd = tmp_path / "run"
-    prepare("2d_potential", rd, workers=2, steps=40)
-    proc = launch(rd, "-i", "infretis.toml", env={HOLD_ENV: "2"})
-    wait_for(lambda: (rd / "treat_output.entered").exists(), timeout=120, what="treat_output")
-    proc.send_signal(signal.SIGTERM)
-    out, _ = proc.communicate(timeout=120)
-    assert proc.returncode == EXIT_STOPPED, out
-    assert "stopping after treat_output" in (rd / "gutsrun.log").read_text()
-    import tomli
-    cstep = tomli.loads((rd / "restart.toml").read_text())["current"]["cstep"]
-    assert cstep >= 1
-    assert "stopped by SIGTERM; moves not yet saved are redone" in out
-
-    proc = launch(rd, "-i", "restart.toml")
-    out, _ = proc.communicate(timeout=600)
-    assert proc.returncode == EXIT_DONE, out
-    nums = path_numbers(rd)
-    assert len(nums) == len(set(nums)), "duplicate path numbers after restart"
-
-
 @pytest.mark.parametrize("gap", [0.001, 0.03])
 def test_second_sigterm_while_stopping(tmp_path, gap):
     """`scancel` signals every process of the job: the launcher gets SIGTERM
@@ -179,6 +126,7 @@ def test_second_sigterm_while_stopping(tmp_path, gap):
     proc.send_signal(signal.SIGTERM)
     out, _ = proc.communicate(timeout=120)
     assert proc.returncode == EXIT_STOPPED, out
+    assert "stopped by SIGTERM; moves not yet saved are redone" in out
 
 
 def test_stop_before_the_first_move_leaves_restart_toml_alone(tmp_path):
@@ -240,113 +188,29 @@ def test_exact_lammps_workers_1(tmp_path):
         assert bare.read_bytes() == guts.read_bytes(), name
 
 
-@pytest.mark.parametrize("module, first", [
-    ("worker", "infretis.setup"), ("launcher", "gutsrun_infretis.worker")])
-def test_infretis_setup_is_imported_before_the_rest_of_infretis(module, first):
-    # A runtime check cannot see a wrong order today: infretis.core.tis
-    # happens to import importlib.util, which the factory needs.
-    source = ROOT / "src" / "gutsrun_infretis" / f"{module}.py"
-    names = [node.names[0].name if isinstance(node, ast.Import) else node.module or ""
-             for node in ast.parse(source.read_text()).body
-             if isinstance(node, ast.Import | ast.ImportFrom)]
-    ours = [n for n in names if n.split(".")[0] in ("infretis", "gutsrun_infretis")]
-    assert ours[0] == first
-
-
-def test_relaunched_finished_run_refused_with_a_way_out(tmp_path):
-    """Launching a finished run saves restarted_from = cstep; infretis then
-    refuses to continue it with more steps. The message says how to undo
-    that, and doing so continues the run."""
+def test_finished_run_launched_again_then_continued(tmp_path):
+    """Launching a finished run does nothing (infretis says so) and changes
+    nothing, so raising its steps continues it."""
     import tomli
     import tomli_w
 
     rd = tmp_path / "run"
     prepare("2d_potential", rd, workers=2, steps=6)
-    for inp in ("infretis.toml", "restart.toml"):  # finish, then launch again
-        out, _ = launch(rd, "-i", inp).communicate(timeout=600)
-    config = tomli.loads((rd / "restart.toml").read_text())
-    cstep = config["current"]["cstep"]
-    assert config["current"]["restarted_from"] == cstep
-    config["simulation"]["steps"] = cstep + 4
-    (rd / "restart.toml").write_text(tomli_w.dumps(config))
-
+    out, _ = launch(rd, "-i", "infretis.toml").communicate(timeout=600)
+    left = (rd / "restart.toml").read_bytes()
     proc = launch(rd, "-i", "restart.toml")
     out, _ = proc.communicate(timeout=600)
-    assert proc.returncode == EXIT_REFUSED, out
-    assert f"delete the line `restarted_from = {cstep}` under [current]" in out
+    assert proc.returncode == EXIT_DONE, out
+    assert "nothing to do: restart.toml: the run is done" in out
+    assert (rd / "restart.toml").read_bytes() == left
 
-    del config["current"]["restarted_from"]
+    config = tomli.loads(left.decode())
+    config["simulation"]["steps"] = config["current"]["cstep"] + 4
     (rd / "restart.toml").write_text(tomli_w.dumps(config))
     proc = launch(rd, "-i", "restart.toml")
     out, _ = proc.communicate(timeout=600)
     assert proc.returncode == EXIT_DONE, out
+    after = tomli.loads((rd / "restart.toml").read_text())["current"]["cstep"]
+    assert after == config["simulation"]["steps"]
     nums = path_numbers(rd)
     assert len(nums) == len(set(nums)), "duplicate path numbers after restart"
-
-
-GROMACS_ENGINE = {"gmx": "gmx-must-not-run", "timestep": 0.002, "subcycles": 1000,
-                  "temperature": 573.15}
-
-
-def gromacs_input(tmp_path):
-    """water_boiling's inputs: they include `conf.g96`, which the engine reads."""
-    inp = tmp_path / "gromacs_input"
-    shutil.copytree(ROOT / "examples" / "water_boiling" / "gromacs_input", inp)
-    return inp
-
-
-def parent_writes_mdp(inp, monkeypatch, **settings):
-    """`infretis.mdp` as infretis's setup writes it in the parent (minus
-    grompp, as `gmx` is not callable here)."""
-    from infretis.classes.engines.gromacs import GromacsEngine
-
-    with monkeypatch.context() as m:
-        m.setattr(GromacsEngine, "_execute_grompp",
-                  lambda self, mdp, conf, deffnm: {"tpr": f"{deffnm}.tpr", "mdout": "mdout.mdp"})
-        GromacsEngine(input_path=str(inp), **{**GROMACS_ENGINE, **settings})
-    return inp / "infretis.mdp"
-
-
-def snapshot(directory):
-    return {p.name: (p.stat().st_ino, p.stat().st_mtime_ns, p.read_bytes())
-            for p in directory.iterdir()}
-
-
-def test_task_engine_leaves_the_gromacs_inputs_alone(tmp_path, monkeypatch):
-    """A task builds its GROMACS engine without grompp and without writing
-    anything to the input directory that other moves read."""
-    from infretis.classes.engines.gromacs import GromacsEngine
-
-    from gutsrun_infretis.worker import shared_gromacs_inputs_read_only
-
-    inp = gromacs_input(tmp_path)
-    assert "ref-t = 573.15" in parent_writes_mdp(inp, monkeypatch).read_text()
-    before = snapshot(inp)
-    grompp = GromacsEngine._execute_grompp
-    with shared_gromacs_inputs_read_only():
-        GromacsEngine(input_path=str(inp), **GROMACS_ENGINE)
-    assert snapshot(inp) == before
-    assert GromacsEngine._execute_grompp is grompp
-    assert "_modify_input" not in GromacsEngine.__dict__
-
-
-@pytest.mark.parametrize("change", ["edited", "other engine", "missing"])
-def test_task_engine_stops_on_a_changed_gromacs_mdp(tmp_path, monkeypatch, change):
-    from infretis.classes.engines.gromacs import GromacsEngine
-
-    from gutsrun_infretis.worker import SharedInputChanged, shared_gromacs_inputs_read_only
-
-    inp = gromacs_input(tmp_path)
-    mdp = parent_writes_mdp(inp, monkeypatch)
-    if change == "edited":
-        mdp.write_text(mdp.read_text().replace("573.15", "300"))
-    elif change == "other engine":  # built last in the parent, so its mdp is on disk
-        parent_writes_mdp(inp, monkeypatch, temperature=300)
-    else:
-        mdp.unlink()
-    before = snapshot(inp)
-    with pytest.raises(SharedInputChanged, match="infretis.mdp"):
-        with shared_gromacs_inputs_read_only():
-            GromacsEngine(input_path=str(inp), **GROMACS_ENGINE)
-    assert snapshot(inp) == before
-    assert "_modify_input" not in GromacsEngine.__dict__
