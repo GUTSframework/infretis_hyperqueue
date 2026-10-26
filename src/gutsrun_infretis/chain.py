@@ -30,11 +30,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from gutsrun.slurm import (
+from gutsrun.chain import (
     ROOT,
     ChainError,
     Progress,
-    Site,
     Spec,
     StateError,
     check,
@@ -48,6 +47,7 @@ from gutsrun.slurm import (
     stop,
     walltime,
 )
+from gutsrun.site import Site, SiteError
 
 EXIT_ACTIVE = 10  # `status`: some job of the chain is still queued or running
 
@@ -200,7 +200,7 @@ def main(argv: list[str] | None = None) -> None:
                 sys.exit(EXIT_ACTIVE if report.active else 0)
         else:
             print(*stop(load_spec(args.rundir)), sep="\n")
-    except (ChainError, StateError) as e:
+    except (ChainError, SiteError, StateError) as e:
         sys.exit(f"gutsrun-infretis: {e}")
 
 

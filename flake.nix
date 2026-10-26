@@ -9,8 +9,9 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
 
-      # Keep in sync with HQ_VERSION / HQ_SHA256 in scripts/get-hq.sh, so the
-      # laptop and the clusters run the same binary.
+      # Keep in sync with HQ_VERSION / HQ_SHA256 in scripts/get-hq.sh and
+      # VERSION in src/gutsrun/hq.py, so the laptop and the clusters run
+      # the same binary.
       hq = pkgs.stdenv.mkDerivation rec {
         pname = "hyperqueue";
         version = "0.26.2";

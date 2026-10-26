@@ -21,7 +21,8 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from gutsrun.slurm import ROOT, ChainError, Site, Spec, StateError, check_time, setup_logging, start
+from gutsrun.chain import ROOT, ChainError, Spec, StateError, check_time, setup_logging, start
+from gutsrun.site import Site, SiteError
 from gutsrun_infretis.chain import InfretisRun
 
 CASES = {"2d": "examples/2d_potential", "lammps": "examples/water_dissociation_lammps"}
@@ -76,7 +77,7 @@ def main() -> None:
                    help="allow a walltime beyond the site's daytime limit")
     p.add_argument("--no-submit", action="store_true",
                    help="prepare the run and its chain, submit nothing, print the spec's "
-                        "path: run links by hand with `python -m gutsrun.slurm link`")
+                        "path: run links by hand with `python -m gutsrun.chain link`")
     args = p.parse_args()
     setup_logging()
 
@@ -97,7 +98,7 @@ def main() -> None:
             example=Path(example), rundir=rundir, workers=args.workers, steps=args.steps,
             seed=None, wmdrun=None, cores_per_worker=1, set=args.set))
         print(start(spec, night=args.night, submit_first=not args.no_submit))
-    except (ChainError, StateError) as e:
+    except (ChainError, SiteError, StateError) as e:
         sys.exit(str(e))
 
 

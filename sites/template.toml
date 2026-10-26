@@ -1,5 +1,5 @@
 # Template for a new site: copy it to sites/<name>.toml and fill it in. It
-# lists every key gutsrun.slurm reads, with what each value means; keys left
+# lists every key gutsrun.site reads, with what each value means; keys left
 # out take the default shown. In a site file, say why a value was chosen.
 
 [slurm]

@@ -19,7 +19,7 @@ How this repo maps onto the GUTSnotes design:
 | Session | the infretis run directory (`load/`, `restart.toml`, `infretis_data.txt`) |
 | Task Scheduler | HQ server |
 | Process Manager | HQ workers |
-| Resource Manager | the chain of Slurm jobs (`gutsrun.slurm`) |
+| Resource Manager | the chain of Slurm jobs (`gutsrun.chain`, with `gutsrun.hq`) |
 | Job Submitter | site files + `sbatch` |
 
 The HPC part (`src/gutsrun/`) is generic and knows nothing about MD; it is
@@ -38,7 +38,7 @@ flowchart LR
         cmd["gutsrun-infretis<br/>submit, status, stop"]
     end
     subgraph job["compute node: one link"]
-        link["python -m gutsrun.slurm link<br/>(standard library only)"]
+        link["python -m gutsrun.chain link<br/>(standard library only)"]
         hqs["HQ server"]
         hqw["HQ worker"]
         launcher["launcher process:<br/>infretis MC loop + TaskExecutor"]
@@ -83,7 +83,9 @@ flowchart TB
         worker["worker.py<br/>init and run_move: the task side"]
     end
     subgraph generic["gutsrun: generic, no MD"]
-        slurm["slurm.py<br/>chain of links, workloads"]
+        gchain["chain.py<br/>chain of links, workloads"]
+        ghq["hq.py<br/>HQ server and workers in a job"]
+        gsite["site.py<br/>sites/*.toml, setup"]
         executor["executor.py<br/>TaskExecutor"]
         spool["spool.py<br/>layout, atomic files"]
         task["task.py<br/>one task process"]
@@ -97,10 +99,12 @@ flowchart TB
     hq["HyperQueue<br/>hq binary, Python client"]
     sl["Slurm<br/>sbatch, srun, scancel"]
 
-    ichain --> slurm
-    slurm --> sl
-    slurm -- "starts server and workers" --> hq
-    slurm -- "link runs the workload's argv" --> launcher
+    ichain --> gchain
+    gchain --> gsite
+    gchain --> ghq
+    gchain --> sl
+    ghq -- "starts server and workers" --> hq
+    gchain -- "link runs the workload's argv" --> launcher
     launcher -- "scheduler(config, executor_factory)" --> sched
     launcher -- "wraps treat_output" --> repex
     launcher -- "subclasses" --> executor
@@ -167,7 +171,7 @@ bench/bare_run.py       run bare infretis on an example, record run.json
 bench/chain.py          chains of an example with either runner (the bare-vs-gutsrun rows)
 bench/move_times.py     per-move time statistics from sim.log
 examples/               prepared infentory cases (examples/README.md)
-src/gutsrun/            generic: TaskExecutor + backends; slurm.py chains Slurm jobs (no MD imports)
+src/gutsrun/            generic: TaskExecutor + backends; chain.py chains Slurm jobs, hq.py and site.py (no MD imports)
 src/gutsrun_infretis/   infretis adapter, launcher, chain workload and command (the only infretis-aware code)
 tests/                  pytest suite (adapter tests need infretis)
 ```
@@ -252,15 +256,16 @@ start. Logs: `gutsrun.log`; moves log to `worker{pin}.log` as before.
 
 ## Chains
 
-`gutsrun.slurm` is the generic chain: what one link does, step by step, is
-in its module docstring. A *workload* (a small class, see `Workload` there)
+`gutsrun.chain` is the generic chain: what one link does, step by step, is
+in its module docstring. It reads the site file through `gutsrun.site` and
+starts HQ through `gutsrun.hq`; neither imports it. A *workload* (a small class, see `Workload` there)
 says what a link runs and how far the run got; `gutsrun_infretis.chain`
 has the infretis one and the `gutsrun-infretis` command, `bench/chain.py`
 one that runs `bench/bare_run.py` with either runner. A link's own process
-runs `.venv/bin/python -m gutsrun.slurm link ...` and imports only the
+runs `.venv/bin/python -m gutsrun.chain link ...` and imports only the
 standard library, so it reads nothing from site-packages on the shared
 file system; the workload's command then runs from the project venv.
-With `nodes` > 1, one srun step runs `python -m gutsrun.slurm worker` on
+With `nodes` > 1, one srun step runs `python -m gutsrun.chain worker` on
 each of the other nodes, which starts an HQ worker there (`run_worker`).
 
 Bench chains on DAS-6, from the repo root on `fs0`:
@@ -274,7 +279,7 @@ Bench chains on DAS-6, from the repo root on `fs0`:
 To run a link without Slurm, e.g. on the laptop, `bench/chain.py
 --no-submit` prepares the run and its chain and prints the spec's path;
 then `GUTSRUN_CORES=4 .venv/bin/python -m
-gutsrun.slurm link <spec> 1` runs link 1 here (inside `nix develop` for hq).
+gutsrun.chain link <spec> 1` runs link 1 here (inside `nix develop` for hq).
 The tests do the same through `start(spec, submit_first=False)`.
 
 ## Tests

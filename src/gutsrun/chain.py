@@ -9,12 +9,13 @@ keyword arguments to create it with. `gutsrun_infretis.chain` provides the
 
 A link runs this module with the project venv's Python:
 
-    .venv/bin/python -m gutsrun.slurm link <rundir>/.gutsrun/chain.json <n>
+    .venv/bin/python -m gutsrun.chain link <rundir>/.gutsrun/chain.json <n>
 
 and, through srun on a link's other nodes, `... worker <spec> <n> <server dir>`.
 
-Standard library only, so that a link's own process imports nothing from
-site-packages on the shared file system.
+Standard library only (as are gutsrun.hq and gutsrun.site, which it
+uses), so that a link's own process imports nothing from site-packages on
+the shared file system.
 
 Each link:
 
@@ -67,25 +68,25 @@ import socket
 import subprocess
 import sys
 import time
-import tomllib
-from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from types import FrameType
 from typing import IO, Any, Protocol
 
+from gutsrun import hq
+from gutsrun.site import Site, SiteError, setup_env
+
 EXIT_STOPPED = 3
 # A link's result when a signal stopped its workload and the next link may
 # continue. The walltime signal and a plain `scancel` are both SIGTERM, so
 # the link cannot tell them apart; its log says when the stop came.
 STOPPED_BY_SIGNAL = "stopped by a signal (walltime or scancel)"
-HQ_VERSION = "0.26.2"  # keep in sync with flake.nix and scripts/get-hq.sh
-# The project checkout this module runs from (src/gutsrun/slurm.py): sites/,
+# The project checkout this module runs from (src/gutsrun/chain.py): sites/,
 # .venv and bin/ live there.
 ROOT = Path(__file__).resolve().parents[2]
 
-log = logging.getLogger("gutsrun.slurm")
+log = logging.getLogger("gutsrun.chain")
 
 
 class ChainError(Exception):
@@ -186,55 +187,14 @@ def load_spec(rundir: str | Path) -> Spec:
     return Spec.load(path)
 
 
-class Site:
-    """sites/<name>.toml; sites/template.toml documents every key. The
-    environment variable GUTSRUN_CORES overrides it,
-    for tests and for trying a link on a machine without Slurm."""
-
-    KEYS = {"slurm": {"partition", "cores_per_node", "exclusive", "max_walltime_day"},
-            "environment": {"setup"}}
-
-    def __init__(self, root: str | Path, name: str) -> None:
-        path = Path(root) / "sites" / f"{name}.toml"
-        if not path.exists():
-            known = sorted(p.stem for p in path.parent.glob("*.toml") if p.stem != "template")
-            raise ChainError(f"no site {name!r}; known: {', '.join(known)} "
-                             "(a new one starts as a copy of sites/template.toml)")
-        data = tomllib.loads(path.read_text())
-        for table, keys in data.items():
-            if table not in self.KEYS:
-                raise ChainError(f"{path}: unknown table [{table}]")
-            if unknown := set(keys) - self.KEYS[table]:
-                raise ChainError(f"{path}: unknown in [{table}]: {', '.join(sorted(unknown))}")
-        slurm = data.get("slurm", {})
-        self.partition: str = slurm["partition"]
-        self.cores: int = int(os.environ.get("GUTSRUN_CORES") or slurm["cores_per_node"])
-        self.exclusive: bool = slurm.get("exclusive", True)
-        if not self.exclusive:
-            raise ChainError(f"{path}: exclusive = false is not supported yet: the HQ "
-                             "worker would claim every core of a node it shares")
-        self.max_walltime_day: str | None = slurm.get("max_walltime_day")
-        self.setup: str | None = data.get("environment", {}).get("setup")
-
-
-def setup_env(setup: str, env: dict[str, str]) -> dict[str, str]:
-    """The environment after running the site's `setup` lines (e.g. `module
-    load`) in bash, starting from `env`. Their output goes to the link's log."""
-    script = f"{{\n{setup}\n}} >&2 || exit 1\nenv -0"
-    done = subprocess.run(["bash", "-c", script], env=env, stdout=subprocess.PIPE)
-    if done.returncode != 0:
-        raise ChainError(f"the site's setup failed (exit {done.returncode}): {setup!r}")
-    pairs = (entry.partition("=") for entry in done.stdout.decode().split("\0") if entry)
-    return {name: value for name, _, value in pairs}
-
-
 def setup_logging() -> None:
     """Log to stdout as "[HH:MM:SS] message": a link's stdout is its Slurm log."""
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", "%H:%M:%S"))
-    log.addHandler(handler)
-    log.setLevel(logging.INFO)
-    log.propagate = False
+    parent = logging.getLogger("gutsrun")  # this module's and gutsrun.hq's
+    parent.addHandler(handler)
+    parent.setLevel(logging.INFO)
+    parent.propagate = False
 
 
 def seconds(walltime: str) -> int:
@@ -333,114 +293,6 @@ def chain_jobs(spec: Spec) -> list[tuple[int, str]]:
     return list(dict.fromkeys(keys))
 
 
-# --- HQ inside the job ---------------------------------------------------------------
-
-
-def wait_listed(directory: Path, name: str, timeout: float) -> bool:
-    """Wait until `name` shows up in a listing of `directory`.
-
-    Polls: a file-change notifier (inotify) sees only changes made on the
-    same machine, not files another node writes over NFS. And it lists the
-    directory instead of retrying the name, because NFS can keep answering
-    "no such file" for a name it looked up before the file existed, for
-    30 s or more; a listing shows a new file within one poll."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if name in os.listdir(directory):
-            return True
-        time.sleep(0.2)
-    return False
-
-
-def hq_binary(root: str | Path) -> str:
-    """The hq binary: bin/hq in the checkout, else the one on PATH, checked
-    to be HQ_VERSION."""
-    bundled = Path(root) / "bin" / "hq"
-    hq = str(bundled) if bundled.exists() else shutil.which("hq")
-    if hq is None:
-        raise ChainError("no hq in bin/ or on PATH (scripts/get-hq.sh)")
-    version = subprocess.run([hq, "--version"], capture_output=True, text=True).stdout.strip()
-    if not version.endswith(f"v{HQ_VERSION}"):
-        raise ChainError(f"need hq {HQ_VERSION}, have: {version}")
-    return hq
-
-
-@contextlib.contextmanager
-def hq_server(root: str | Path, server: Path, log_prefix: str, cores: int,
-              env: dict[str, str] | None = None) -> Iterator[str]:
-    """Run an HQ server and one worker on this node for the `with` block;
-    yields the directory of the hq binary. The worker, and so its tasks,
-    runs in `env`. Stops both and removes the server directory when the
-    block ends, also on errors."""
-    hq = hq_binary(root)
-    shutil.rmtree(server, ignore_errors=True)
-    # Created here, so that the wait below lists an existing directory.
-    server.mkdir(parents=True)
-    processes: list[subprocess.Popen[bytes]] = []
-    try:
-        with open(f"{log_prefix}-hq-server.log", "wb") as out:
-            processes.append(subprocess.Popen(
-                [hq, "server", "start", "--server-dir", str(server)],
-                stdout=out, stderr=subprocess.STDOUT))
-        if not wait_listed(server, "hq-current", 60):
-            raise ChainError(f"hq server did not start; see {log_prefix}-hq-server.log")
-        with open(f"{log_prefix}-hq-worker.log", "wb") as out:
-            processes.append(subprocess.Popen(
-                [hq, "worker", "start", "--server-dir", str(server), "--cpus", str(cores)],
-                stdout=out, stderr=subprocess.STDOUT, env=env))
-        log.info(f"hq server and worker started in {server}")
-        yield str(Path(hq).parent)
-    finally:
-        subprocess.run([hq, "server", "stop", "--server-dir", str(server)],
-                       capture_output=True)
-        for process in processes:
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-        shutil.rmtree(server, ignore_errors=True)
-
-
-@contextlib.contextmanager
-def hq_workers_elsewhere(spec: Spec, link: int, server: Path, cores: int,
-                         env: dict[str, str] | None = None) -> Iterator[None]:
-    """One HQ worker on each of the job's other nodes for the `with` block:
-    one srun step that runs `worker` there (see `run_worker`), in `env`
-    (srun passes the environment on to the step). Stops them
-    when the block ends by stopping the HQ server: each worker then exits.
-    srun does not pass
-    SIGTERM on (it kills the step), so it is signalled only if the step
-    does not end by itself."""
-    hq = hq_binary(spec.root)
-    others = spec.nodes - 1
-    python = str(Path(spec.root) / ".venv" / "bin" / "python")
-    # --relative=1: the nodes after the first, which runs this link.
-    # --cpus-per-task: a step gets one CPU per task unless told otherwise,
-    # and the worker and its tasks would be confined to it.
-    argv = ["srun", f"--nodes={others}", f"--ntasks={others}", "--ntasks-per-node=1",
-            "--relative=1", f"--cpus-per-task={cores}", "--kill-on-bad-exit=0",
-            python, "-m", "gutsrun.slurm", "worker", str(spec.path), str(link), str(server)]
-    log.info(f"hq workers on {others} more node(s): {shlex.join(argv)}")
-    step = subprocess.Popen(argv, env=env)
-    try:
-        yield
-    finally:
-        subprocess.run([hq, "server", "stop", "--server-dir", str(server)],
-                       capture_output=True)
-        try:
-            step.wait(timeout=60)
-        except subprocess.TimeoutExpired:
-            log.info("hq workers on the other nodes still running after 60 s; ending srun")
-            step.send_signal(signal.SIGTERM)
-            try:
-                step.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                step.kill()
-                step.wait()
-        log.info(f"hq workers on the other nodes: srun exit {step.returncode}")
-
-
 # --- submitting, status, stopping ------------------------------------------------------
 
 
@@ -448,7 +300,7 @@ def sbatch_argv(spec: Spec, site: Site, link: int, after: str | None = None) -> 
     """The sbatch command for one link, `after` the job it follows. `exec`
     makes Python the job's main process, which gets Slurm's signal."""
     python = Path(spec.root) / ".venv" / "bin" / "python"
-    command = (f"exec {shlex.quote(str(python))} -m gutsrun.slurm link "
+    command = (f"exec {shlex.quote(str(python))} -m gutsrun.chain link "
                f"{shlex.quote(str(spec.path))} {link}")
     argv = ["sbatch", "--parsable", f"--job-name=gutsrun-{spec.name}-{link}",
             f"--partition={site.partition}", f"--nodes={spec.nodes}", f"--time={spec.time}",
@@ -524,7 +376,7 @@ def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
     """Check (see `check()`) and save a new chain in an existing run
     directory and submit its first link; returns the job id. With
     `submit_first=False`, returns the spec's path instead, to run
-    `python -m gutsrun.slurm link <spec> 1` by hand.
+    `python -m gutsrun.chain link <spec> 1` by hand.
 
     If sbatch refuses link 1, puts the previous chain's spec and stop file
     back, so that `status` still reports on that chain, and raises
@@ -789,11 +641,13 @@ def run_link(spec_path: str | Path, link: int) -> int:
                     env = setup_env(site.setup, env)
                 if workload.needs_hq:
                     server = spec.dir / f"hq-{job}"
-                    hq_dir = stack.enter_context(hq_server(spec.root, server, log_prefix,
-                                                           site.cores, env))
+                    hq_dir = stack.enter_context(hq.server_and_worker(
+                        spec.root, server, log_prefix, site.cores, env))
                     if spec.nodes > 1:
-                        stack.enter_context(hq_workers_elsewhere(spec, link, server,
-                                                                 site.cores, env))
+                        command = [python, "-m", "gutsrun.chain", "worker", str(spec.path),
+                                   str(link), str(server)]
+                        stack.enter_context(hq.workers_elsewhere(
+                            spec.root, server, spec.nodes - 1, site.cores, command, env))
                     env["HQ_SERVER_DIR"] = str(server)
                     env["PATH"] = os.pathsep.join([hq_dir, env.get("PATH", "")])
                 argv = workload.argv(python, rundir, link)
@@ -805,7 +659,7 @@ def run_link(spec_path: str | Path, link: int) -> int:
                     exit_code = child.wait()  # resumes after a forwarded signal
                     forwarder.child = None
                     log.info(f"workload exit {exit_code}")
-        except ChainError as e:
+        except (ChainError, SiteError, hq.HQError) as e:
             log.info(str(e))
             cancel_next("failed")
             return end(1, "failed", str(e))
@@ -850,22 +704,22 @@ def run_worker(spec_path: str | Path, link: int, server: Path) -> int:
     site = Site(spec.root, spec.site)
     job = os.environ.get("SLURM_JOB_ID", f"nojob-{os.getpid()}")
     try:
-        hq = hq_binary(spec.root)
-        if not wait_listed(server, "hq-current", 60):
+        binary = hq.binary(spec.root)
+        if not hq.wait_listed(server, "hq-current", 60):
             log.info(f"{host}: no hq server in {server}; no worker here")
             return 1
         if forwarder.received:
             return 0
         with open(spec.dir / f"link{link}-{job}-hq-worker-{host}.log", "wb") as out:
-            child = forwarder.start([hq, "worker", "start", "--server-dir", str(server),
+            child = forwarder.start([binary, "worker", "start", "--server-dir", str(server),
                                      "--cpus", str(site.cores)], stdout=out)
         log.info(f"{host}: hq worker started")
         code = child.wait()
         # The link ends its workers by stopping the server; HQ exits 1 then.
-        stopped = subprocess.run([hq, "server", "info", "--server-dir", str(server)],
+        stopped = subprocess.run([binary, "server", "info", "--server-dir", str(server)],
                                  capture_output=True).returncode != 0
         log.info(f"{host}: hq worker exit {code}" + (", server stopped" if stopped else ""))
-    except ChainError as e:
+    except hq.HQError as e:
         log.info(f"{host}: {e}")
         return 1
     return 0 if forwarder.received or stopped else code
@@ -890,7 +744,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    # Through the imported module: workloads raise gutsrun.slurm.StateError,
+    # Through the imported module: workloads raise gutsrun.chain.StateError,
     # which is not this __main__ module's class of the same name.
-    from gutsrun.slurm import main as imported_main
+    from gutsrun.chain import main as imported_main
     sys.exit(imported_main())

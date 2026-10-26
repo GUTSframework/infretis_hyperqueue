@@ -1,4 +1,4 @@
-"""gutsrun.slurm (chained Slurm jobs) without Slurm: fake sbatch, scancel and
+"""gutsrun.chain (chained Slurm jobs) without Slurm: fake sbatch, scancel and
 squeue record their calls, and a counting workload (chain_workload.py)
 stands in for infretis. Links run as real processes, as in a job."""
 
@@ -15,14 +15,13 @@ from pathlib import Path
 import pytest
 from conftest import wait_for
 
-import gutsrun.slurm as slurm
+import gutsrun.chain as chain
 import gutsrun_infretis.chain as cli
-from gutsrun.slurm import (
+from gutsrun.chain import (
     STOPPED_BY_SIGNAL,
     ChainError,
     Forwarder,
     Report,
-    Site,
     Spec,
     StateError,
     events,
@@ -32,13 +31,13 @@ from gutsrun.slurm import (
     revision,
     sbatch_argv,
     seconds,
-    setup_env,
     start,
     status,
     stop,
     walltime,
     why_over,
 )
+from gutsrun.site import Site, SiteError, setup_env
 from gutsrun_infretis.chain import InfretisRun
 
 REPO = Path(__file__).resolve().parent.parent
@@ -133,7 +132,7 @@ class Project:
 
     def start_link(self, spec: Spec, n: int, **env: str) -> subprocess.Popen[str]:
         """Start link `n` as a process, as Slurm would."""
-        argv = [sys.executable, "-m", "gutsrun.slurm", "link", str(spec.path), str(n)]
+        argv = [sys.executable, "-m", "gutsrun.chain", "link", str(spec.path), str(n)]
         return subprocess.Popen(argv, cwd=self.root, env={**self.env, **env},
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
@@ -180,12 +179,12 @@ def test_template_lists_every_site_key():
 def test_site_refusals(project):
     path = project.root / "sites" / "test.toml"
     path.write_text(path.read_text() + "typo = 1\n")
-    with pytest.raises(ChainError, match="unknown in \\[slurm\\]: typo"):
+    with pytest.raises(SiteError, match="unknown in \\[slurm\\]: typo"):
         Site(project.root, "test")
     path.write_text('[slurm]\npartition = "q"\ncores_per_node = 2\nexclusive = false\n')
-    with pytest.raises(ChainError, match="not supported"):
+    with pytest.raises(SiteError, match="not supported"):
         Site(project.root, "test")
-    with pytest.raises(ChainError, match="known: test"):
+    with pytest.raises(SiteError, match="known: test"):
         Site(project.root, "nosuch")
 
 
@@ -225,7 +224,7 @@ def test_start_submits_link_1_with_site_options(project, monkeypatch):
     for part in ["--partition=testq", "--exclusive", "--nodes=1", "--time=00:05:00",
                  "--signal=B:TERM@90", f"--chdir={project.rundir}",
                  f"--output={project.rundir}/.gutsrun/link1-%j.out",
-                 f"exec {project.root}/.venv/bin/python -m gutsrun.slurm link",
+                 f"exec {project.root}/.venv/bin/python -m gutsrun.chain link",
                  f"{spec.path} 1"]:
         assert part in call
     assert "--dependency" not in call
@@ -473,9 +472,9 @@ def test_follow_shows_progress_that_changed_inside_the_quiet_window(project, mon
     reports = iter([Report(p, [], ["1 RUNNING"], None, True) for p in progress]
                    + [Report("step 2", [], ["1 ended"], "done", False)])
     printed = []
-    monkeypatch.setattr(slurm, "status", lambda _spec: next(reports))
-    monkeypatch.setattr(slurm.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(slurm.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(chain, "status", lambda _spec: next(reports))
+    monkeypatch.setattr(chain.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(chain.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
     monkeypatch.setattr("builtins.print", lambda *a, **_: printed.append(a[1]))
     follow(spec, interval=100, progress_every=300)
     # t=0 first report; t=100 step 2 is too soon; t=300 shows it; t=500 the end.
@@ -534,7 +533,7 @@ def test_hq_workers_on_the_other_nodes(tmp_path):
     assert json.loads((project.rundir / "hq.json").read_text())["workers"] == 2
     [srun] = project.calls("srun")
     for part in ["--nodes=1", "--ntasks=1", "--ntasks-per-node=1", "--relative=1",
-                 "--cpus-per-task=2", f"-m gutsrun.slurm worker {spec.path} 1 "]:
+                 "--cpus-per-task=2", f"-m gutsrun.chain worker {spec.path} 1 "]:
         assert part in srun
     assert "hq worker started" in out
     assert "hq worker exit 1, server stopped" in out  # the worker was not killed
