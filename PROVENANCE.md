@@ -25,10 +25,6 @@ infretis commit `a42e039`, licence: MIT, "Copyright (c) 2022 infretis".
 |---|---|---|
 | `worker.init`, `worker.run_move` | `worker_initializer`, `infretis/asyncrunner.py:210-230` | engine set-up calls and log handler set-up, split in two |
 
-`bench/cold_start.py` and `bench/hq_dispatch.py` call the same infretis
-functions as `worker_initializer` (a few lines of calls, not copied
-code).
-
 MIT allows this under any outbound licence, open or closed, as long as
 the infretis copyright and permission notice travels with the derived
 code. `worker.py` carries it in its header. The fixes we needed in

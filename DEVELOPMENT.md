@@ -158,7 +158,7 @@ scripts/get-hq.sh       pinned hq binary into ./bin, for clusters without Nix
 scripts/setup-venv.sh   .venv from the lock file, plus this checkout (editable)
 scripts/sync.sh         rsync the repo to a login node, pull runs/<site>/ back
 scripts/wait-jobs.sh    poll a login node's squeue until jobs finish, optionally pull
-scripts/das6/           DAS-6 probes (login node read-only, one-node and two-node jobs);
+scripts/das6/           probe-login.sh (what the login node has, read-only);
                         install-engines.sh (GROMACS, LAMMPS from conda-forge)
 sites/                  one file per cluster; template.toml documents every key
 ASSUMPTIONS.md          version pins and cluster assumptions
@@ -166,11 +166,6 @@ PROVENANCE.md           where each file comes from, and under which terms
 bench/bare_run.py       run bare infretis on an example, record run.json
 bench/chain.py          chains of an example with either runner (the bare-vs-gutsrun rows)
 bench/move_times.py     per-move time statistics from sim.log
-bench/cold_start.py     cold start of a fresh infretis worker process (N at once)
-bench/fs_latency.py     cross-node file visibility on a shared FS (ping-pong)
-bench/hq_dispatch.py    HQ per-task round trip (program vs Python function task)
-bench/executor_roundtrip.py  round trip of a trivial call through gutsrun
-bench/step5.sh          each case through bare / gutsrun local / gutsrun HQ, back to back
 examples/               prepared infentory cases (examples/README.md)
 src/gutsrun/            generic: TaskExecutor + backends; slurm.py chains Slurm jobs (no MD imports)
 src/gutsrun_infretis/   infretis adapter, launcher, chain workload and command (the only infretis-aware code)
