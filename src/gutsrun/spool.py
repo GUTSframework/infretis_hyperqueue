@@ -1,11 +1,11 @@
 """The spool directory shared by the executor and its tasks.
 
-Layout (one directory per executor instance, the "epoch"):
+Layout (one directory per executor instance; a new executor deletes the
+others, so tasks of an older one find neither their input nor out/):
 
-    <spool>/CURRENT                 name of the live epoch
-    <spool>/<epoch>/in/<tid>.pkl    task input (sys.path, then the call)
-    <spool>/<epoch>/out/<tid>.<instance>.pkl   task result
-    <spool>/<epoch>/log/<tid>.<instance>.{out,err}
+    <spool>/<name>/in/<tid>.pkl    task input (sys.path, then the call)
+    <spool>/<name>/out/<tid>.<instance>.pkl   task result
+    <spool>/<name>/log/<tid>.<instance>.{out,err}
 
 Every file is written to a dot-prefixed temporary name and renamed into
 place, so a reader never sees half a file. Readers skip dot files.
@@ -16,11 +16,9 @@ import pickle
 import time
 from pathlib import Path
 
-CURRENT = "CURRENT"
 
-
-def new_epoch() -> str:
-    """A name that sorts by start time and does not collide."""
+def new_name() -> str:
+    """A directory name that sorts by start time and does not collide."""
     import secrets  # not needed in task processes
 
     return time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(4)
@@ -34,19 +32,6 @@ def write_atomic(path: Path, data: bytes) -> None:
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)
-
-
-def read_current(spool: Path) -> str | None:
-    """The live epoch's name; None before an executor took the spool."""
-    try:
-        return (spool / CURRENT).read_text().strip()
-    except FileNotFoundError:
-        return None
-
-
-def is_current(epoch_dir: Path) -> bool:
-    """Whether `epoch_dir` is the live epoch of its spool."""
-    return read_current(epoch_dir.parent) == epoch_dir.name
 
 
 def dump(*objects: object) -> bytes:

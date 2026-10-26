@@ -3,14 +3,13 @@
 import asyncio
 import functools
 import os
-import pickle
 import time
 
 import helpers
 import pytest
 from conftest import wait_for
 
-from gutsrun import RemoteTraceback, TaskFailed, spool
+from gutsrun import RemoteTraceback, TaskExecutor, TaskFailed, spool
 from gutsrun.backends import Resources
 
 
@@ -125,26 +124,22 @@ def test_unpicklable_result(make_executor):
         fut.result(timeout=60)
 
 
-def test_stale_epoch_task_does_nothing(tmp_path):
-    """A task from an epoch that is no longer current neither runs nor publishes."""
+def test_task_of_a_taken_over_spool_does_nothing(tmp_path):
+    """A task whose executor's directory a newer executor removed neither
+    runs nor publishes."""
     from gutsrun import task
+    from gutsrun.backends.local import LocalBackend
 
     spool_dir = tmp_path / "spool"
-    old = spool_dir / "old-epoch"
+    old = spool_dir / "old"
     for sub in ("in", "out", "log"):
         (old / sub).mkdir(parents=True)
     marker = tmp_path / "ran"
     (old / "in" / "00000000.pkl").write_bytes(
         spool.dump([], (helpers.touch, (str(marker),), {}, None, ())))
-    (spool_dir / spool.CURRENT).write_text("new-epoch")
 
-    assert task.main([str(old), "00000000"]) == task.EXIT_STALE
+    TaskExecutor(LocalBackend(max_workers=1), spool_dir).shutdown()
+    assert not old.exists()
+    with pytest.raises(FileNotFoundError):
+        task.main([str(old), "00000000"])
     assert not marker.exists()
-    assert os.listdir(old / "out") == []
-
-    # Same input, current epoch: it runs and publishes.
-    (spool_dir / spool.CURRENT).write_text("old-epoch")
-    assert task.main([str(old), "00000000"]) == 0
-    assert marker.exists()
-    (result,) = os.listdir(old / "out")
-    assert pickle.loads((old / "out" / result).read_bytes()) == ("ok", str(marker))

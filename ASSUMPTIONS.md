@@ -54,7 +54,7 @@ its admins.
   waits for another node's file lists the directory, never retries
   `open()`/`exists()` on the name: a node that looked a name up before it
   existed can keep missing it for 30 s or more. A file replaced in place is
-  seen at once; `spool/CURRENT` relies on that.
+  seen at once.
 - `/usr/bin/python3.12` exists on fs0 and the compute nodes (patch levels
   differ); the default `python3` is 3.6.8. The venv is built on fs0.
 - Tasks run Python from the venv on `/home`. A copy unpacked to `/local`

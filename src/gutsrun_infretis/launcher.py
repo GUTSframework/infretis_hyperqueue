@@ -114,7 +114,7 @@ def make_factory(make_backend: Callable[[int | None], Backend], spool_dir: str,
             initializer=gutsrun_infretis.worker.init, initargs=(config,),
             resource_dict=resource_dict)
         EXECUTORS.append(ex)
-        log.info("gutsrun executor: spool %s, epoch %s", ex.spool, ex.epoch)
+        log.info("gutsrun executor: %s", ex.dir)
         return ex
     return factory
 

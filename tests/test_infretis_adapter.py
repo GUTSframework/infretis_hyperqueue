@@ -118,9 +118,9 @@ def test_2d_potential_run(tmp_path):
     assert rec["returncode"] == EXIT_DONE
     nums = path_numbers(rd)
     assert len(nums) == len(set(nums)) > 0
-    (epoch,) = [d for d in (rd / "gutsrun-spool").iterdir() if d.is_dir()]
+    (executor_dir,) = [d for d in (rd / "gutsrun-spool").iterdir() if d.is_dir()]
     for sub in ("in", "out", "log"):
-        assert os.listdir(epoch / sub) == [], sub
+        assert os.listdir(executor_dir / sub) == [], sub
     assert {"worker0.log", "worker1.log"} <= {p.name for p in rd.iterdir()}
     assert "infinity" not in (rd / "gutsrun.log").read_text()  # no infretis log echoed
 

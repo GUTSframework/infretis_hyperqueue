@@ -85,7 +85,7 @@ flowchart TB
     subgraph generic["gutsrun: generic, no MD"]
         slurm["slurm.py<br/>chain of links, workloads"]
         executor["executor.py<br/>TaskExecutor"]
-        spool["spool.py<br/>epochs, atomic files"]
+        spool["spool.py<br/>layout, atomic files"]
         task["task.py<br/>one task process"]
         backends["backends/<br/>local.py, hq.py"]
     end
@@ -132,9 +132,9 @@ sequenceDiagram
     R->>R: REPEX_state.pick: ensemble, path, random stream
     R->>X: submit(partial(run_md, md_items))
     X->>S: in/{tid}.pkl: sys.path and the call (temp file, rename)
-    X->>H: one job, one program task:<br/>python -m gutsrun.task {epoch} {tid}
+    X->>H: one job, one program task:<br/>python -m gutsrun.task {dir} {tid}
     H->>T: starts it on a worker, with its cores
-    T->>S: is the epoch still CURRENT? read in/{tid}.pkl
+    T->>S: read in/{tid}.pkl
     T->>T: worker.init: build the engines<br/>run_move: run_md, which runs lmp or gmx
     T->>S: out/{tid}.{instance}.pkl (temp file, rename)
     loop every 20 ms
@@ -189,11 +189,13 @@ ex = TaskExecutor(HQBackend(server_dir), "runs/x/spool",
 fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})
 ```
 
-- **Spool directory**, one subdirectory per executor instance (the
-  *epoch*): `in/` holds the pickled calls, `out/` the results
-  (`<tid>.<instance>.pkl`, temp + rename), `log/` stdout/stderr. `CURRENT`
-  names the live epoch. A new executor takes over the spool and deletes
-  older epochs. Tasks of an older epoch neither start nor publish.
+- **Spool directory**, one subdirectory per executor instance: `in/`
+  holds the pickled calls, `out/` the results (`<tid>.<instance>.pkl`,
+  temp + rename), `log/` stdout/stderr. A new executor deletes the older
+  subdirectories, so tasks of an older executor (still running after a
+  killed launcher on a long-lived HQ server) neither start nor publish.
+  In a chain this cannot happen: each link has a fresh HQ server, and
+  Slurm ends a link's tasks with its job.
 - **Completion** from result files (listed every 20 ms). Failures from the
   backend every 2 s (HQ: one batched `get_failed_tasks` call). The first
   result for a task wins; later ones are deleted. Files of finished

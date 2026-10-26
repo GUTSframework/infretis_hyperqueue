@@ -83,8 +83,7 @@ class TaskExecutor(Executor):
         self.keep_failed_logs = keep_failed_logs
 
         self.spool = Path(spool_dir).resolve()
-        self.epoch = spool.new_epoch()
-        self.dir = self.spool / self.epoch
+        self.dir = self.spool / spool.new_name()
         for sub in ("in", "out", "log"):
             (self.dir / sub).mkdir(parents=True)
         self._take_over_spool()
@@ -153,14 +152,11 @@ class TaskExecutor(Executor):
     # --- internals ------------------------------------------------------------
 
     def _take_over_spool(self) -> None:
-        """Make this epoch the live one; tasks of older epochs stop publishing.
-
-        Older epoch directories are removed. A stale task still writing into
-        one fails harmlessly.
-        """
-        spool.write_atomic(self.spool / spool.CURRENT, self.epoch.encode())
+        """Remove the directories of older executors. Their tasks, if any
+        still run (a killed launcher on a long-lived HQ server), then fail
+        without running or publishing: their input and out/ are gone."""
         for d in self.spool.iterdir():
-            if d.is_dir() and d.name != self.epoch:
+            if d.is_dir() and d != self.dir:
                 shutil.rmtree(d, ignore_errors=True)
 
     def _watch(self) -> None:
