@@ -226,8 +226,6 @@ def test_launcher_through_hq(hq_cluster, tmp_path):
                   "--hq-server-dir", str(hq_cluster.dir))
     out, _ = proc.communicate(timeout=600)
     assert proc.returncode == EXIT_DONE, out
-    rows = [json.loads(line) for line in (rd / "gutsrun-timings.jsonl").read_text().splitlines()]
-    assert len(rows) >= 10 and all(r["instance"] == "0" for r in rows)
     nums = path_numbers(rd)
     assert len(nums) == len(set(nums)) > 0
 

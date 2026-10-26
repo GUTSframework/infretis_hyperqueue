@@ -26,7 +26,6 @@ run only:
   infretis commits with the same functions and the `executor_factory`
   hook run fine. Of the engine constructors, only GROMACS's and LAMMPS's
   are checked, for every run (DEVELOPMENT.md lists the gaps).
-- `gutsrun-timings.jsonl`: per-move timings (see gutsrun.executor).
 - `gutsrun-stops.jsonl`: one line per stop by a signal, with the move time
   it lost: each move not yet through `treat_output` is redone after the
   restart, so its wall-clock time from submit to its end (or to the stop,
@@ -137,8 +136,7 @@ MOVES = Moves()
 
 
 def make_factory(make_backend: Callable[[int | None], Backend], spool_dir: str,
-                 resource_dict: dict[str, Any],
-                 timings_path: str | None = None) -> Callable[..., InfretisExecutor]:
+                 resource_dict: dict[str, Any]) -> Callable[..., InfretisExecutor]:
     """infretis's `executor_factory`: takes ProcessPoolExecutor's arguments
     and returns an InfretisExecutor."""
 
@@ -149,7 +147,7 @@ def make_factory(make_backend: Callable[[int | None], Backend], spool_dir: str,
         ex = InfretisExecutor(
             make_backend(max_workers), spool_dir, max_workers=max_workers,
             initializer=gutsrun_infretis.worker.init, initargs=(config,),
-            resource_dict=resource_dict, timings_path=timings_path)
+            resource_dict=resource_dict)
         EXECUTORS.append(ex)
         log.info("gutsrun executor: spool %s, epoch %s", ex.spool, ex.epoch)
         return ex
@@ -367,8 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     make_backend = local_backend if args.backend == "local" else hq_backend
 
     resources = {"cores": args.cores_per_task, "cwd": os.getcwd()}
-    factory = make_factory(make_backend, args.spool, resources,
-                           timings_path="gutsrun-timings.jsonl")
+    factory = make_factory(make_backend, args.spool, resources)
     stop = GracefulStop()
     stop.install()
 

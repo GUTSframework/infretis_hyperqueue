@@ -173,7 +173,6 @@ bench/fs_latency.py     cross-node file visibility on a shared FS (ping-pong)
 bench/hq_dispatch.py    HQ per-task round trip (program vs Python function task)
 bench/executor_roundtrip.py  round trip of a trivial call through gutsrun
 bench/step5.sh          each case through bare / gutsrun local / gutsrun HQ, back to back
-bench/timings_summary.py  per-phase medians from gutsrun-timings.jsonl
 examples/               prepared infentory cases (examples/README.md)
 src/gutsrun/            generic: TaskExecutor + backends; slurm.py chains Slurm jobs (no MD imports)
 src/gutsrun_infretis/   infretis adapter, launcher, chain workload and command (the only infretis-aware code)
@@ -255,8 +254,7 @@ engines (ASE, CP2K, TurtleMD, AMS; AMS's constructor starts an
 helpers they call. Exit codes: 0 done, 1 an error (traceback in
 `gutsrun.log` and on stderr), 3 stopped by a signal, 4 infretis refused to
 start. Logs: `gutsrun.log`; moves log to
-`worker{pin}.log` as before; per-move timings go to
-`gutsrun-timings.jsonl` (`bench/timings_summary.py` summarises them);
+`worker{pin}.log` as before;
 the move time each stop lost goes to `gutsrun-stops.jsonl` (moves not yet
 through `treat_output`, by pin, from submit to their end or the stop).
 

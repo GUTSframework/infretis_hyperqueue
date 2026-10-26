@@ -115,8 +115,7 @@ infretis's own outputs, as without gutsrun, plus:
 - `.gutsrun/chain.json`: the chain's settings.
 - `.gutsrun/link<n>-<job>-hq-server.log`, `-hq-worker.log` and, with
   `nodes` > 1, `-hq-worker-<host>.log` for each other node: HQ's own logs.
-- `gutsrun.log`, `gutsrun-timings.jsonl`: the launcher's log and per-move
-  timings (with the host each move ran on).
+- `gutsrun.log`: the launcher's log.
 - `gutsrun-stops.jsonl`: one line per link stopped by a signal, with the
   move time the stop lost. Moves that had not been saved when the link
   stopped are redone by the next link; the link's log says how many, the
