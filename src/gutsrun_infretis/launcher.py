@@ -12,8 +12,9 @@ leave the shared GROMACS inputs alone, and it stops gracefully on SIGTERM
 and SIGINT. What the launcher adds, for this run only:
 
 - `restart.toml` is backed up and parse-checked at start.
-- Under HQ, `-pin`/`-pinoffset`/`-pinstride` are removed from `wmdrun`
-  (HQ places tasks), and `-ntomp` must equal --cores-per-task (HQ sets
+- Under HQ, a `wmdrun` with `-pin`/`-pinoffset`/`-pinstride` is refused
+  (HQ places tasks, so fixed offsets would put moves on the same cores),
+  and so is one whose `-ntomp` differs from --cores-per-task (HQ sets
   OMP_NUM_THREADS to it; GROMACS aborts on a mismatch).
 - A stop signal that comes before infretis's scheduler takes over the
   signals, or after it gave them back, also stops the run; later ones
@@ -117,21 +118,24 @@ def stop_once(signum: int, frame: FrameType | None) -> None:
     raise Stop(signal.Signals(signum).name)
 
 
-def strip_pinning(wmdrun: list, cores: int) -> list:
-    """Remove GROMACS pinning flags; check -ntomp against the task's cores."""
-    out = []
+PINNING = re.compile(r"(?<!\S)-pin(offset|stride)?(?!\S)")
+
+
+def check_wmdrun(wmdrun: list, cores: int) -> None:
+    """Exit if a GROMACS command in `wmdrun` cannot run as an HQ task as it
+    is: with pinning flags, or with -ntomp other than the task's cores."""
     for cmd in wmdrun:
         if not isinstance(cmd, str):
-            out.append(cmd)  # ASE examples use placeholders
-            continue
-        new = re.sub(r"\s-pin\s+\S+|\s-pinoffset\s+\S+|\s-pinstride\s+\S+", "", cmd)
-        m = re.search(r"-ntomp\s+(\d+)", new)
+            continue  # LAMMPS and ASE examples use placeholders
+        if m := PINNING.search(cmd):
+            sys.exit(f"wmdrun has {m.group()} in {cmd!r}: under HQ, remove -pin, "
+                     "-pinoffset and -pinstride; HQ places the tasks, and fixed "
+                     "offsets would put moves on the same cores")
+        m = re.search(r"-ntomp\s+(\d+)", cmd)
         if m and int(m.group(1)) != cores:
             sys.exit(f"wmdrun has -ntomp {m.group(1)} but --cores-per-task is {cores}; "
                      "HQ sets OMP_NUM_THREADS to the task's cores and GROMACS aborts "
                      "when they differ")
-        out.append(new)
-    return out
 
 
 def check_restart_file(inp: str) -> None:
@@ -234,8 +238,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"infretis refused to start: {reason}", file=sys.stderr)
             return EXIT_REFUSED
         if args.backend == "hq" and "wmdrun" in config["runner"]:
-            config["runner"]["wmdrun"] = strip_pinning(config["runner"]["wmdrun"],
-                                                       args.cores_per_task)
+            check_wmdrun(config["runner"]["wmdrun"], args.cores_per_task)
         stopped = scheduler(config, executor_factory=factory)
         if stopped is None:
             return EXIT_DONE

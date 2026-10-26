@@ -23,7 +23,7 @@ from conftest import wait_for  # noqa: E402
 from gutsrun_infretis.launcher import (  # noqa: E402
     EXIT_DONE,
     EXIT_STOPPED,
-    strip_pinning,
+    check_wmdrun,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -66,11 +66,14 @@ def path_numbers(rundir):
     return [int(r[0]) for r in rows]
 
 
-def test_strip_pinning():
-    cmds = ["gmx mdrun -ntomp 2 -ntmpi 1 -pin on -pinoffset 4 -pinstride 1", 1]
-    assert strip_pinning(cmds, 2) == ["gmx mdrun -ntomp 2 -ntmpi 1", 1]
-    with pytest.raises(SystemExit, match="-ntomp 2"):
-        strip_pinning(cmds, 4)
+def test_check_wmdrun():
+    check_wmdrun(["gmx mdrun -ntomp 2 -ntmpi 1", 1], 2)
+    for flag in ("-pin on", "-pinoffset 4", "-pinstride 1"):
+        with pytest.raises(SystemExit, match=f"wmdrun has {flag.split()[0]} in"):
+            check_wmdrun([f"gmx mdrun -ntomp 2 {flag}"], 2)
+    with pytest.raises(SystemExit, match="-ntomp 2 but --cores-per-task is 4"):
+        check_wmdrun(["gmx mdrun -ntomp 2 -ntmpi 1"], 4)
+    check_wmdrun(["gmx_pin mdrun -ntomp 2 -deffnm x-pin"], 2)  # not flags
 
 
 def test_infretis_without_executor_hook_refused(monkeypatch):

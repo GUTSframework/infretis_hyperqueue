@@ -234,8 +234,9 @@ parent writes them once at setup, and refuses engines that share an
 `input_path` with different settings), infretis stops gracefully on
 SIGTERM/SIGINT (after the result it is recording, `restart.toml` last),
 and a refused setup logs why. The launcher adds, for this run only: a
-`restart.toml` backup at start, `wmdrun` pinning flags stripped under HQ,
-and `-ntomp` checked against `--cores-per-task`. At start it refuses an
+`restart.toml` backup at start, and under HQ a check of `wmdrun`: no
+pinning flags (HQ places the tasks), and `-ntomp` equal to
+`--cores-per-task`; a `wmdrun` that fails it is refused, not rewritten. At start it refuses an
 infretis without the `executor_factory` hook or the graceful stop. The
 fork's other fixes (atomic `restart.toml`, no busy spin in the parent,
 restarts from the run's seed) apply to bare runs too. Exit codes: 0 done
