@@ -26,13 +26,6 @@ run only:
   infretis commits with the same functions and the `executor_factory`
   hook run fine. Of the engine constructors, only GROMACS's and LAMMPS's
   are checked, for every run (DEVELOPMENT.md lists the gaps).
-- `gutsrun-stops.jsonl`: one line per stop by a signal, with the move time
-  it lost: each move not yet through `treat_output` is redone after the
-  restart, so its wall-clock time from submit to its end (or to the stop,
-  if still running) is lost. `lost_s` sums these over the moves, which ran
-  in parallel; `longest_s` is the longest, about what the run was set back;
-  `lost_core_s` is `lost_s` times --cores-per-task, cores reserved rather
-  than CPU time used. Also on stderr.
 
 Exit codes: 0 = all steps done, 3 = stopped by a signal (restart from
 restart.toml), 4 = infretis refused to start (the reason and what to do
@@ -101,38 +94,10 @@ class InfretisExecutor(TaskExecutor):
     def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
         if args or kwargs:
             raise TypeError("infretis submits partial(run_md, md_item) only")
-        future = super().submit(gutsrun_infretis.worker.run_move, fn)
-        MOVES.submitted(fn.args[0]["pin"], future)  # pyright: ignore[reportFunctionMemberAccess]
-        return future
+        return super().submit(gutsrun_infretis.worker.run_move, fn)
 
 
 EXECUTORS: list[InfretisExecutor] = []
-
-
-class Moves:
-    """The moves submitted and not yet through treat_output, by pin (a pin
-    runs one move at a time): when each was submitted, and when it ended."""
-
-    def __init__(self) -> None:
-        self.submitted_at: dict[int, float] = {}
-        self.ended_at: dict[int, float] = {}
-
-    def submitted(self, pin: int, future: Future[Any]) -> None:
-        self.submitted_at[pin] = time.time()
-        future.add_done_callback(lambda _: self.ended_at.__setitem__(pin, time.time()))
-
-    def treated(self, pin: int) -> None:
-        self.submitted_at.pop(pin, None)
-        self.ended_at.pop(pin, None)
-
-    def lost(self, now: float) -> list[dict[str, Any]]:
-        """Per open move: its pin, whether it had ended, and its seconds."""
-        return [{"pin": pin, "ended": pin in self.ended_at,
-                 "seconds": round(self.ended_at.get(pin, now) - submitted, 3)}
-                for pin, submitted in sorted(self.submitted_at.items())]
-
-
-MOVES = Moves()
 
 
 def make_factory(make_backend: Callable[[int | None], Backend], spool_dir: str,
@@ -222,9 +187,7 @@ class GracefulStop:
                 Path("treat_output.entered").touch()
                 time.sleep(hold)
             try:
-                result = original(state, md_items)
-                MOVES.treated(md_items["pin"])
-                return result
+                return original(state, md_items)
             finally:
                 guard.in_treat = False
                 if guard.requested is not None:
@@ -245,26 +208,6 @@ class GracefulStop:
                     " after treat_output" if self.in_treat else "")
         if not self.in_treat:
             raise Stop(self.requested)
-
-
-def report_lost(signal_name: str, cores_per_task: int) -> None:
-    """Log, print and append to gutsrun-stops.jsonl the move time the stop
-    lost (see the module docstring)."""
-    now = time.time()
-    moves = MOVES.lost(now)
-    seconds = round(sum(m["seconds"] for m in moves), 3)
-    longest = max((m["seconds"] for m in moves), default=0.0)
-    text = (f"stopped by {signal_name}: {len(moves)} move(s) not saved, to be redone; "
-            f"{seconds:.1f} s of move time summed over them (longest {longest:.1f} s), "
-            f"{seconds * cores_per_task:.1f} core-s reserved at {cores_per_task} "
-            f"core(s) per move")
-    log.warning("%s", text)
-    print(text, file=sys.stderr)
-    row = {"time": now, "signal": signal_name, "cores_per_task": cores_per_task,
-           "lost_s": seconds, "longest_s": longest,
-           "lost_core_s": round(seconds * cores_per_task, 3), "moves": moves}
-    with open("gutsrun-stops.jsonl", "a") as f:
-        f.write(json.dumps(row) + "\n")
 
 
 def strip_pinning(wmdrun: list, cores: int) -> list:
@@ -382,7 +325,9 @@ def main(argv: list[str] | None = None) -> int:
         scheduler(config, executor_factory=factory)
         return EXIT_DONE
     except Stop as s:
-        report_lost(str(s), args.cores_per_task)
+        text = f"stopped by {s}; moves not yet saved are redone after the restart"
+        log.warning("%s", text)
+        print(text, file=sys.stderr)
         return EXIT_STOPPED
     except Exception:
         log.exception("run failed")

@@ -81,7 +81,7 @@ was given (dotted arrow).
 flowchart TB
     subgraph adapter["gutsrun_infretis: adapter"]
         ichain["chain.py<br/>InfretisRun workload,<br/>gutsrun-infretis command"]
-        launcher["launcher.py<br/>executor factory, GracefulStop,<br/>source checks, lost-move report"]
+        launcher["launcher.py<br/>executor factory, GracefulStop,<br/>source checks"]
         worker["worker.py<br/>init and run_move: the task side"]
     end
     subgraph generic["gutsrun: generic, no MD"]
@@ -253,10 +253,7 @@ engines (ASE, CP2K, TurtleMD, AMS; AMS's constructor starts an
 `AMSWorker`, here once per move); and it hashes the constructors, not the
 helpers they call. Exit codes: 0 done, 1 an error (traceback in
 `gutsrun.log` and on stderr), 3 stopped by a signal, 4 infretis refused to
-start. Logs: `gutsrun.log`; moves log to
-`worker{pin}.log` as before;
-the move time each stop lost goes to `gutsrun-stops.jsonl` (moves not yet
-through `treat_output`, by pin, from submit to their end or the stop).
+start. Logs: `gutsrun.log`; moves log to `worker{pin}.log` as before.
 
 ## Chains
 

@@ -116,12 +116,6 @@ infretis's own outputs, as without gutsrun, plus:
 - `.gutsrun/link<n>-<job>-hq-server.log`, `-hq-worker.log` and, with
   `nodes` > 1, `-hq-worker-<host>.log` for each other node: HQ's own logs.
 - `gutsrun.log`: the launcher's log.
-- `gutsrun-stops.jsonl`: one line per link stopped by a signal, with the
-  move time the stop lost. Moves that had not been saved when the link
-  stopped are redone by the next link; the link's log says how many, the
-  wall-clock seconds they had used, summed and the longest (the moves ran
-  in parallel, so the longest is about what the run was set back), and the
-  core-seconds reserved for them (not CPU time measured).
 - `restart.toml.bak.<step>`: a copy of `restart.toml` at each link's start.
 
 infretis writes its data to `infretis_data.txt`, unless that file exists

@@ -127,8 +127,6 @@ What to look at in the run directory:
 - `restart.toml`: `current.cstep` is the step reached.
 - `.gutsrun/link<n>-<job>.out`: each link's log, including infretis's
   output. Look here first when a link failed.
-- `gutsrun-stops.jsonl`: per link stop, the moves that will be redone
-  and the move time lost.
 
 ## 6. Longer runs
 
