@@ -114,6 +114,21 @@ def test_sigterm_then_restart(tmp_path):
     assert len(nums) == len(set(nums)), "duplicate path numbers after restart"
 
 
+def test_bare_run_stopped_by_sigterm(tmp_path):
+    """bench/bare_run.py stopped by SIGTERM exits EXIT_STOPPED also for bare
+    infretis, which exits with 128 + the signal."""
+    rd = tmp_path / "run"
+    proc = subprocess.Popen(
+        [sys.executable, str(BARE_RUN), str(ROOT / "examples" / "2d_potential"), str(rd),
+         "--workers", "2", "--steps", "100000"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    wait_for(lambda: (rd / "restart.toml").exists(), timeout=120, what="restart.toml")
+    proc.send_signal(signal.SIGTERM)
+    out, _ = proc.communicate(timeout=120)
+    assert proc.returncode == EXIT_STOPPED, out
+    assert json.loads((rd / "run.json").read_text())[-1]["returncode"] == 128 + signal.SIGTERM
+
+
 @pytest.mark.parametrize("gap", [0.001, 0.03])
 def test_second_sigterm_while_stopping(tmp_path, gap):
     """`scancel` signals every process of the job: the launcher gets SIGTERM

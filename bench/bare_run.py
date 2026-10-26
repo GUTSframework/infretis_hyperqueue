@@ -221,7 +221,10 @@ def main() -> None:
     print(json.dumps(record, indent=2))
     if killed:
         sys.exit(0)
-    if stopped_by and proc.returncode in (EXIT_STOPPED, -signal.Signals[stopped_by]):
+    # gutsrun exits EXIT_STOPPED; bare infretis 128 + the signal, or dies of
+    # it before its scheduler takes the signals over.
+    if stopped_by and proc.returncode in (EXIT_STOPPED, 128 + signal.Signals[stopped_by],
+                                          -signal.Signals[stopped_by]):
         sys.exit(EXIT_STOPPED)
     sys.exit(proc.returncode if proc.returncode >= 0 else 128 - proc.returncode)
 
