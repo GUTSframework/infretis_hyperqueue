@@ -21,8 +21,7 @@ runs in an existing, prepared directory from restart.toml if there is one,
 else from infretis.toml (the links of bench/chain.py).
 
 infretis runs as `python -c` with this interpreter, not through the
-`infretisrun` script, whose shebang names the venv it was installed in (a
-venv copied to node-local disk would still run the original). SIGTERM and
+`infretisrun` script, whose shebang names the venv it was installed in. SIGTERM and
 SIGINT are passed on to infretis; the exit code is then 3, as the gutsrun
 launcher's, if infretis stopped or died of the signal. Bare infretis runs in
 its own process group and gets the signal there, since its

@@ -13,7 +13,7 @@ partition = "defq"
 cores_per_node = 24
 
 # Whole nodes for each job, so no other job shares them. Default: true.
-# true:  the HQ worker uses every core, and timings are free of other jobs.
+# true:  the HQ worker uses every core, and no other job slows the moves.
 # false: not supported yet. The HQ worker would still claim every core of a
 #        node that other jobs share.
 exclusive = true
@@ -23,25 +23,6 @@ exclusive = true
 # a longer --time unless given --night. Leave it out where Slurm itself
 # enforces the partition's limits (sbatch then refuses longer jobs).
 # max_walltime_day = "00:15:00"
-
-[node]
-# Run each job's Python from a copy of the venv unpacked to node-local disk
-# (bin/venv.tar, packed by `submit` when .venv changed). Default: false.
-# true:  every Python start reads node-local disk instead of the shared
-#        file system: faster per task when the venv is on NFS, and it spares
-#        the file server when many nodes start at once. Costs a few seconds
-#        of unpacking per job, and needs local_disk.
-# false: Python runs from the project's .venv where it is. Right when the
-#        venv sits on a fast parallel file system, or the nodes have no
-#        local disk.
-local_venv = false
-
-# Node-local disk that jobs may write to, for local_venv. Default: none.
-# Common: /local, /tmp, /scratch-local. It must exist under the same path on
-# every node: with nodes > 1, each node of a job unpacks its own copy there,
-# and moves run with the copy's Python by that path. Copies left by jobs
-# that are gone are removed by the next job on that node.
-# local_disk = "/local"
 
 [environment]
 # Shell lines each link runs in bash before it starts anything, to make the

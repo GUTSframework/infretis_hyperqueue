@@ -31,7 +31,6 @@ Part of the GUTS Fast Track. For how it is built, tested and measured, see
 login node                     compute node, one Slurm job per link
 ----------                     ------------------------------------
 gutsrun-infretis submit ─────▶ link 1  submits link 2 (starts after link 1 ends)
-                                       unpacks the venv to node-local disk
                                        starts an HQ server and worker
                                        runs infretis from infretis.toml
                                        ... SIGTERM 90 s before the walltime:
@@ -144,8 +143,6 @@ differ between clusters:
   `max_walltime_day` holds such a limit; `submit` then refuses a longer
   `time` unless given `--night`. Where Slurm itself enforces the limits,
   leave it out.
-- **Where Python starts from.** With `local_venv = true`, each job unpacks
-  the venv to node-local disk, which helps when the venv is on NFS.
 - **How the MD engine is loaded.** Usually a site module, whose name
   differs from cluster to cluster. `[environment] setup` holds the lines
   that load it (e.g. `module load GROMACS`); each link runs them before

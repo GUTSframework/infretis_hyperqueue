@@ -57,10 +57,9 @@ its admins.
   seen at once; `spool/CURRENT` relies on that.
 - `/usr/bin/python3.12` exists on fs0 and the compute nodes (patch levels
   differ); the default `python3` is 3.6.8. The venv is built on fs0.
-- Workers run a node-local copy of the venv, unpacked to `/local` at job
-  start (0.15–0.3 s faster per task start than from `/home`, 2 s to unpack
-  per job), so everything is called as `python -m`:
-  entry-point scripts keep the `/home` venv in their shebang.
+- Tasks run Python from the venv on `/home`. A copy unpacked to `/local`
+  per job would start each task 0.15–0.3 s faster, for 2 s of unpacking
+  per job; the Fast Track does without it, for simplicity.
 - Node-local disk at `/local` (NVMe); shared scratch at `/var/scratch/$USER`
   (40 GB quota); `/home` has a 5 GB quota.
 - The soft limit on open files in a job is 1024 (hard: 131072).

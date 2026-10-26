@@ -138,8 +138,6 @@ def describe(spec: Spec, night: bool) -> list[str]:
     """What `submit` would do, after the checks; writes nothing."""
     plan = check(spec, night)
     lines = [f"checks passed: {spec.name} on {spec.site}, {plan.progress.text}"]
-    if plan.pack:
-        lines.append("would pack .venv into bin/venv.tar")
     lines.append(f"would submit link 1 of {spec.links}: "
                  f"{shlex.join(sbatch_argv(spec, plan.site, 1))}")
     return lines

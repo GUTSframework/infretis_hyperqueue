@@ -10,7 +10,6 @@ keyword arguments to create it with. `gutsrun_infretis.chain` provides the
 A link runs this module with the project venv's Python:
 
     .venv/bin/python -m gutsrun.slurm link <rundir>/.gutsrun/chain.json <n>
-    .venv/bin/python -m gutsrun.slurm pack     (bin/venv.tar from .venv)
 
 and, through srun on a link's other nodes, `... worker <spec> <n> <server dir>`.
 
@@ -28,28 +27,22 @@ Each link:
    nodes) is the one in force, and a process may raise it up to the hard
    limit. An HQ server and worker with many tasks hold many files and
    sockets at once.
-4. If the site sets `[node] local_venv`, unpacks bin/venv.tar to node-local disk
-   and runs that copy: starting Python from a node-local disk is faster
-   than from NFS, and spares the file server. First removes copies left by
-   jobs that are gone (a job killed at its walltime skips its cleanup).
-5. If the site sets `[environment] setup`, runs those lines in bash, e.g.
+4. If the site sets `[environment] setup`, runs those lines in bash, e.g.
    `module load` for the programs the tasks call. The HQ workers, and so
    their tasks, and the workload run in the environment they leave.
-6. If the workload needs HQ: starts an HQ server and one worker inside the
+5. If the workload needs HQ: starts an HQ server and one worker inside the
    job, in a fresh server directory on the shared file system, without a
    journal. The workload's own state is what a restart continues from.
    With `nodes` > 1, starts one HQ worker on each of the job's other nodes
-   too, in one srun step (`worker` below): each unpacks its own venv copy
-   first if the site uses one, at the same path as on the first node, since
-   tasks run with the workload's interpreter. At the end of the link,
-   stopping the server ends these workers, and each removes its copy.
-7. Runs the workload's command in the run directory, passing SIGTERM and
+   too, in one srun step (`worker` below). At the end of the link,
+   stopping the server ends these workers.
+6. Runs the workload's command in the run directory, passing SIGTERM and
    SIGINT on. Slurm sends SIGTERM `margin` seconds before the walltime
    (`--signal=B:TERM@margin`), and may send it up to 60 s earlier than asked.
    A signal that comes before the workload has set up its own handler
    (for infretis: while it imports, about a second) kills it; the link then
    reports "failed (exit -15)", although nothing was written.
-8. Cancels the next link if the run is done, failed or stopped, or the link
+7. Cancels the next link if the run is done, failed or stopped, or the link
    itself crashed. A workload exits with EXIT_STOPPED when a signal stopped
    it and it can continue.
 
@@ -131,7 +124,7 @@ class Workload(Protocol):
 
     def argv(self, python: str, rundir: Path, link: int) -> list[str]:
         """The command one link runs, in the run directory, with `python`
-        (the venv copy's interpreter, or the project venv's)."""
+        (the project venv's interpreter)."""
         ...
 
 
@@ -195,11 +188,10 @@ def load_spec(rundir: str | Path) -> Spec:
 
 class Site:
     """sites/<name>.toml; sites/template.toml documents every key. The
-    environment variables GUTSRUN_LOCAL_DISK and GUTSRUN_CORES override it,
+    environment variable GUTSRUN_CORES overrides it,
     for tests and for trying a link on a machine without Slurm."""
 
     KEYS = {"slurm": {"partition", "cores_per_node", "exclusive", "max_walltime_day"},
-            "node": {"local_venv", "local_disk"},
             "environment": {"setup"}}
 
     def __init__(self, root: str | Path, name: str) -> None:
@@ -214,7 +206,7 @@ class Site:
                 raise ChainError(f"{path}: unknown table [{table}]")
             if unknown := set(keys) - self.KEYS[table]:
                 raise ChainError(f"{path}: unknown in [{table}]: {', '.join(sorted(unknown))}")
-        slurm, node = data.get("slurm", {}), data.get("node", {})
+        slurm = data.get("slurm", {})
         self.partition: str = slurm["partition"]
         self.cores: int = int(os.environ.get("GUTSRUN_CORES") or slurm["cores_per_node"])
         self.exclusive: bool = slurm.get("exclusive", True)
@@ -222,11 +214,6 @@ class Site:
             raise ChainError(f"{path}: exclusive = false is not supported yet: the HQ "
                              "worker would claim every core of a node it shares")
         self.max_walltime_day: str | None = slurm.get("max_walltime_day")
-        self.local_venv: bool = node.get("local_venv", False)
-        self.local_disk: str | None = (os.environ.get("GUTSRUN_LOCAL_DISK")
-                                       or node.get("local_disk"))
-        if self.local_venv and not self.local_disk:
-            raise ChainError(f"{path}: local_venv = true needs local_disk")
         self.setup: str | None = data.get("environment", {}).get("setup")
 
 
@@ -346,72 +333,6 @@ def chain_jobs(spec: Spec) -> list[tuple[int, str]]:
     return list(dict.fromkeys(keys))
 
 
-# --- the venv copy on node-local disk ------------------------------------------------
-
-
-def venv_stale(root: str | Path) -> bool:
-    """True if bin/venv.tar is missing or older than the venv. pyvenv.cfg
-    changes when the venv is created, site-packages when a package is
-    installed or removed."""
-    root = Path(root)
-    tarball = root / "bin" / "venv.tar"
-    if not tarball.exists():
-        return True
-    sources = [root / ".venv" / "pyvenv.cfg", *root.glob(".venv/lib/python3*/site-packages"),
-               root / "requirements-lock.txt"]
-    return any(p.exists() and p.stat().st_mtime > tarball.stat().st_mtime for p in sources)
-
-
-def pack_venv(root: str | Path) -> None:
-    """Pack .venv into bin/venv.tar, via a temporary file, so a running job
-    never reads a half-written tarball."""
-    root = Path(root)
-    (root / "bin").mkdir(exist_ok=True)
-    tmp = root / "bin" / ".venv.tar.tmp"
-    subprocess.run(["tar", "-C", str(root), "-cf", str(tmp), ".venv"], check=True)
-    os.replace(tmp, root / "bin" / "venv.tar")
-
-
-def sweep_venvs(base: Path, user: str) -> None:
-    """Remove the venv copies of this user's jobs that are no longer queued.
-    Removes nothing if squeue does not answer."""
-    jobs = queue(user)
-    if jobs is None:
-        return
-    prefix = f"{user}-gutsrun-"
-    for copy in base.glob(prefix + "*"):
-        if copy.is_dir() and copy.name.removeprefix(prefix) not in jobs:
-            shutil.rmtree(copy, ignore_errors=True)
-            log.info(f"removed stale {copy}")
-
-
-@contextlib.contextmanager
-def local_venv(root: str | Path, local_disk: str, job: str) -> Iterator[str]:
-    """Unpack the venv to node-local disk for the `with` block; yields the
-    copy's Python and removes the copy when the block ends, also on errors."""
-    root = Path(root)
-    if venv_stale(root):
-        raise ChainError("bin/venv.tar is missing or older than .venv; "
-                         "run `.venv/bin/python -m gutsrun.slurm pack`")
-    user = getpass.getuser()  # $LOGNAME/$USER, else the password database
-    base = Path(local_disk)
-    sweep_venvs(base, user)
-    target = base / f"{user}-gutsrun-{job}"
-    started = time.monotonic()
-    try:
-        target.mkdir(parents=True)
-        subprocess.run(["tar", "-C", str(target), "-xf", str(root / "bin" / "venv.tar")],
-                       check=True)
-    except (OSError, subprocess.CalledProcessError) as e:
-        shutil.rmtree(target, ignore_errors=True)
-        raise ChainError(f"unpacking the venv to {target} failed: {e}") from e
-    log.info(f"venv unpacked to {target} in {time.monotonic() - started:.1f} s")
-    try:
-        yield str(target / ".venv" / "bin" / "python")
-    finally:
-        shutil.rmtree(target, ignore_errors=True)
-
-
 # --- HQ inside the job ---------------------------------------------------------------
 
 
@@ -487,8 +408,8 @@ def hq_workers_elsewhere(spec: Spec, link: int, server: Path, cores: int,
     """One HQ worker on each of the job's other nodes for the `with` block:
     one srun step that runs `worker` there (see `run_worker`), in `env`
     (srun passes the environment on to the step). Stops them
-    when the block ends by stopping the HQ server: each worker then exits
-    and its `worker` removes the node's venv copy. srun does not pass
+    when the block ends by stopping the HQ server: each worker then exits.
+    srun does not pass
     SIGTERM on (it kills the step), so it is signalled only if the step
     does not end by itself."""
     hq = hq_binary(spec.root)
@@ -556,7 +477,6 @@ class Plan:
     site: Site
     progress: Progress  # the run's, before the chain
     revision: str  # of the gutsrun checkout
-    pack: bool  # bin/venv.tar must be packed first
 
 
 def check(spec: Spec, night: bool = False, submitting: bool = True) -> Plan:
@@ -597,7 +517,7 @@ def check(spec: Spec, night: bool = False, submitting: bool = True) -> Plan:
     if rev == "unknown":
         log.warning("warning: no REVISION file and no git; the runs will not record "
                     "which code they ran (scripts/sync.sh push writes REVISION)")
-    return Plan(site, progress, rev, site.local_venv and venv_stale(root))
+    return Plan(site, progress, rev)
 
 
 def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
@@ -612,9 +532,6 @@ def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
     `check()`); the new spec cannot be written only once link 1 is
     accepted, since link 1 may start and read it at once."""
     plan = check(spec, night, submitting=submit_first)
-    if plan.pack:
-        log.info("packing .venv into bin/venv.tar")
-        pack_venv(spec.root)
     spec.dir.mkdir(exist_ok=True)
     previous = spec.path.read_bytes() if spec.path.exists() else None
     was_stopped = spec.stop_file.exists()
@@ -866,9 +783,6 @@ def run_link(spec_path: str | Path, link: int) -> int:
         try:
             with contextlib.ExitStack() as stack:
                 python = str(Path(spec.root) / ".venv" / "bin" / "python")
-                if site.local_venv:
-                    assert site.local_disk  # Site checks it
-                    python = stack.enter_context(local_venv(spec.root, site.local_disk, job))
                 env = dict(os.environ)
                 if site.setup:
                     log.info(f"site setup: {site.setup!r}")
@@ -927,11 +841,9 @@ def run_link(spec_path: str | Path, link: int) -> int:
 
 
 def run_worker(spec_path: str | Path, link: int, server: Path) -> int:
-    """On one of a link's other nodes (in its srun step): unpack the venv
-    copy if the site uses one, at the same path as on the link's first node,
-    since tasks run with the workload's interpreter; wait for the HQ server;
-    run an HQ worker on all cores until the link stops the server (or
-    SIGTERM). Removes the copy at the end."""
+    """On one of a link's other nodes (in its srun step): wait for the HQ
+    server, then run an HQ worker on all cores until the link stops the
+    server (or SIGTERM)."""
     host = socket.gethostname()
     forwarder = Forwarder(f"the hq worker on {host}")
     spec = Spec.load(spec_path)
@@ -939,24 +851,20 @@ def run_worker(spec_path: str | Path, link: int, server: Path) -> int:
     job = os.environ.get("SLURM_JOB_ID", f"nojob-{os.getpid()}")
     try:
         hq = hq_binary(spec.root)
-        with contextlib.ExitStack() as stack:
-            if site.local_venv:
-                assert site.local_disk  # Site checks it
-                stack.enter_context(local_venv(spec.root, site.local_disk, job))
-            if not wait_listed(server, "hq-current", 60):
-                log.info(f"{host}: no hq server in {server}; no worker here")
-                return 1
-            if forwarder.received:
-                return 0
-            with open(spec.dir / f"link{link}-{job}-hq-worker-{host}.log", "wb") as out:
-                child = forwarder.start([hq, "worker", "start", "--server-dir", str(server),
-                                         "--cpus", str(site.cores)], stdout=out)
-            log.info(f"{host}: hq worker started")
-            code = child.wait()
-            # The link ends its workers by stopping the server; HQ exits 1 then.
-            stopped = subprocess.run([hq, "server", "info", "--server-dir", str(server)],
-                                     capture_output=True).returncode != 0
-            log.info(f"{host}: hq worker exit {code}" + (", server stopped" if stopped else ""))
+        if not wait_listed(server, "hq-current", 60):
+            log.info(f"{host}: no hq server in {server}; no worker here")
+            return 1
+        if forwarder.received:
+            return 0
+        with open(spec.dir / f"link{link}-{job}-hq-worker-{host}.log", "wb") as out:
+            child = forwarder.start([hq, "worker", "start", "--server-dir", str(server),
+                                     "--cpus", str(site.cores)], stdout=out)
+        log.info(f"{host}: hq worker started")
+        code = child.wait()
+        # The link ends its workers by stopping the server; HQ exits 1 then.
+        stopped = subprocess.run([hq, "server", "info", "--server-dir", str(server)],
+                                 capture_output=True).returncode != 0
+        log.info(f"{host}: hq worker exit {code}" + (", server stopped" if stopped else ""))
     except ChainError as e:
         log.info(f"{host}: {e}")
         return 1
@@ -974,17 +882,11 @@ def main(argv: list[str] | None = None) -> int:
     worker.add_argument("spec", type=Path)
     worker.add_argument("link", type=int)
     worker.add_argument("server", type=Path)
-    pack = commands.add_parser("pack", help="pack .venv into bin/venv.tar")
-    pack.add_argument("--root", type=Path, default=ROOT)
     args = parser.parse_args(argv)
     setup_logging()
     if args.command == "link":
         return run_link(args.spec, args.link)
-    if args.command == "worker":
-        return run_worker(args.spec, args.link, args.server)
-    pack_venv(args.root)
-    print(args.root / "bin" / "venv.tar")
-    return 0
+    return run_worker(args.spec, args.link, args.server)
 
 
 if __name__ == "__main__":

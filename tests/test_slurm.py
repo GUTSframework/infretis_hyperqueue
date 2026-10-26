@@ -3,14 +3,12 @@ squeue record their calls, and a counting workload (chain_workload.py)
 stands in for infretis. Links run as real processes, as in a job."""
 
 import dataclasses
-import getpass
 import json
 import os
 import shutil
 import signal
 import subprocess
 import sys
-import time
 import tomllib
 from pathlib import Path
 
@@ -38,7 +36,6 @@ from gutsrun.slurm import (
     start,
     status,
     stop,
-    venv_stale,
     walltime,
     why_over,
 )
@@ -51,10 +48,6 @@ SITE = """\
 partition = "testq"
 cores_per_node = 2
 max_walltime_day = "00:15:00"
-
-[node]
-local_disk = "{local_disk}"
-local_venv = {local_venv}
 """
 # Exports a variable and writes to stdout, as `module load` may.
 SETUP = """
@@ -79,14 +72,12 @@ FAKE_SQUEUE = """\
 [ -n "${FAKE_SQUEUE+x}" ] || exit 1
 printf '%s\\n' "$FAKE_SQUEUE"
 """
-# Runs the step's command here, once, as if on one other node: with its own
-# node-local disk ($FAKE_NODE_DISK), as each node has. Like srun, it does not
-# pass SIGTERM on: it kills the step.
+# Runs the step's command here, once, as if on one other node. Like srun, it
+# does not pass SIGTERM on: it kills the step.
 FAKE_SRUN = """\
 #!/usr/bin/env bash
 echo "srun $*" >> "$FAKE_LOG"
 while [ "${1#-}" != "$1" ]; do shift; done
-[ -n "${FAKE_NODE_DISK:-}" ] && export GUTSRUN_LOCAL_DISK="$FAKE_NODE_DISK"
 trap 'echo "srun: forcing job termination"; kill -KILL "$child"' TERM
 "$@" &
 child=$!
@@ -99,15 +90,11 @@ FAKE_HQ = '#!/usr/bin/env bash\necho "hyperqueue v0.26.2"\n'
 class Project:
     """A gutsrun checkout (sites/, .venv, fake Slurm commands) and a run directory."""
 
-    def __init__(self, root: Path, local_venv: bool = False):
+    def __init__(self, root: Path):
         self.root = root
-        self.local = root / "local"
-        self.local.mkdir()
         (root / "sites").mkdir()
-        (root / "sites" / "test.toml").write_text(SITE.format(
-            local_venv=str(local_venv).lower(), local_disk=self.local))
+        (root / "sites" / "test.toml").write_text(SITE)
         (root / ".venv" / "bin").mkdir(parents=True)
-        (root / ".venv" / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
         (root / ".venv" / "bin" / "python").symlink_to(sys.executable)
         self.fakebin = root / "fakebin"
         self.fakebin.mkdir()
@@ -193,7 +180,7 @@ def test_template_lists_every_site_key():
 def test_site_refusals(project):
     path = project.root / "sites" / "test.toml"
     path.write_text(path.read_text() + "typo = 1\n")
-    with pytest.raises(ChainError, match="unknown in \\[node\\]: typo"):
+    with pytest.raises(ChainError, match="unknown in \\[slurm\\]: typo"):
         Site(project.root, "test")
     path.write_text('[slurm]\npartition = "q"\ncores_per_node = 2\nexclusive = false\n')
     with pytest.raises(ChainError, match="not supported"):
@@ -520,45 +507,6 @@ def test_a_stopped_chain_cancels_its_next_link_and_runs_no_more(project):
     assert rc == 0 and "not running" in out
 
 
-# --- the venv copy ------------------------------------------------------------------
-
-
-def test_local_venv_copy_and_sweep(tmp_path):
-    project = Project(tmp_path, local_venv=True)
-    spec = project.spec()  # packs bin/venv.tar
-    assert not venv_stale(project.root)
-    user = getpass.getuser()
-    gone, running = project.local / f"{user}-gutsrun-999", project.local / f"{user}-gutsrun-1234"
-    gone.mkdir()
-    running.mkdir()
-    rc, out = project.link(spec, 1, FAKE_SQUEUE="1234 RUNNING 0:01 node1")
-    assert rc == 0, out
-    assert f"removed stale {gone}" in out
-    assert sorted(project.local.iterdir()) == [running]  # its own copy removed too
-    assert (project.rundir / "python.txt").read_text().startswith(str(project.local))
-
-
-def test_no_squeue_answer_removes_nothing(tmp_path):
-    project = Project(tmp_path, local_venv=True)
-    spec = project.spec()
-    other = project.local / f"{getpass.getuser()}-gutsrun-999"
-    other.mkdir()
-    rc, out = project.link(spec, 1)  # FAKE_SQUEUE unset: squeue fails
-    assert rc == 0, out
-    assert other.exists()
-
-
-def test_stale_tarball_refuses_and_cancels(tmp_path):
-    project = Project(tmp_path, local_venv=True)
-    spec = project.spec()
-    later = time.time() + 10
-    os.utime(project.root / ".venv" / "lib" / "python3.12" / "site-packages", (later, later))
-    rc, out = project.link(spec, 1)
-    assert rc == 1
-    assert "older than .venv" in out
-    assert project.calls("scancel") == ["scancel 1001"]
-
-
 # --- HQ inside the job --------------------------------------------------------------
 
 
@@ -579,11 +527,9 @@ def test_hq_server_and_worker_in_the_link(project):
 def test_hq_workers_on_the_other_nodes(tmp_path):
     if shutil.which("hq") is None:
         pytest.skip("no hq binary (run inside `nix develop`)")
-    project = Project(tmp_path, local_venv=True)
-    node_disk = tmp_path / "node1-local"
-    node_disk.mkdir()
+    project = Project(tmp_path)
     spec = project.spec(nodes=2, needs_hq=True, workers=2)
-    rc, out = project.link(spec, 1, SLURM_JOB_ID="4242", FAKE_NODE_DISK=str(node_disk))
+    rc, out = project.link(spec, 1, SLURM_JOB_ID="4242")
     assert rc == 0, out
     assert json.loads((project.rundir / "hq.json").read_text())["workers"] == 2
     [srun] = project.calls("srun")
@@ -594,8 +540,6 @@ def test_hq_workers_on_the_other_nodes(tmp_path):
     assert "hq worker exit 1, server stopped" in out  # the worker was not killed
     assert "srun exit 0" in out
     assert list(spec.dir.glob("link1-4242-hq-worker-*.log"))
-    assert "venv unpacked to " + str(node_disk) in out  # the other node's own copy
-    assert list(node_disk.iterdir()) == []  # and removed at the end
 
 
 # --- the infretis workload and gutsrun-infretis --------------------------------------

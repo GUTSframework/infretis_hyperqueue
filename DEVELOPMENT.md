@@ -29,8 +29,8 @@ meant to grow into the shared GUTS HPC packages. Only the adapter
 ### Where things run
 
 One link is one Slurm job. Everything that must outlive a job lives in the
-run directory on the shared file system; everything else (HQ, the venv
-copy) is started fresh by each link.
+run directory on the shared file system; everything else (HQ) is
+started fresh by each link.
 
 ```mermaid
 flowchart LR
@@ -39,7 +39,6 @@ flowchart LR
     end
     subgraph job["compute node: one link"]
         link["python -m gutsrun.slurm link<br/>(standard library only)"]
-        venv["venv copy on node-local disk"]
         hqs["HQ server"]
         hqw["HQ worker"]
         launcher["launcher process:<br/>infretis MC loop + TaskExecutor"]
@@ -57,7 +56,6 @@ flowchart LR
     cmd -- "sbatch link 1" --> link
     cmd -- "reads" --> chainfiles
     link -- "sbatch next link (afterany)" --> link
-    link -- "unpacks" --> venv
     link -- "starts" --> hqs & hqw
     link -- "srun" --> hqw2
     link -- "runs, passes SIGTERM on" --> launcher
@@ -264,10 +262,9 @@ has the infretis one and the `gutsrun-infretis` command, `bench/chain.py`
 one that runs `bench/bare_run.py` with either runner. A link's own process
 runs `.venv/bin/python -m gutsrun.slurm link ...` and imports only the
 standard library, so it reads nothing from site-packages on the shared
-file system; the workload's command then runs from the node-local venv
-copy. With `nodes` > 1, one srun step runs `python -m gutsrun.slurm worker`
-on each of the other nodes: it unpacks that node's venv copy and starts an
-HQ worker there (`run_worker`).
+file system; the workload's command then runs from the project venv.
+With `nodes` > 1, one srun step runs `python -m gutsrun.slurm worker` on
+each of the other nodes, which starts an HQ worker there (`run_worker`).
 
 Bench chains on DAS-6, from the repo root on `fs0`:
 
@@ -279,7 +276,7 @@ Bench chains on DAS-6, from the repo root on `fs0`:
 
 To run a link without Slurm, e.g. on the laptop, `bench/chain.py
 --no-submit` prepares the run and its chain and prints the spec's path;
-then `GUTSRUN_LOCAL_DISK=<dir> GUTSRUN_CORES=4 .venv/bin/python -m
+then `GUTSRUN_CORES=4 .venv/bin/python -m
 gutsrun.slurm link <spec> 1` runs link 1 here (inside `nix develop` for hq).
 The tests do the same through `start(spec, submit_first=False)`.
 
