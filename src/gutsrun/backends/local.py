@@ -74,7 +74,9 @@ class LocalBackend:
         self._queue = deque(t for t in self._queue if t[0] != tid)
         proc = self._running.get(tid)
         if proc is not None and proc.poll() is None:
-            # The task runs in its own session; stop its children too (MD engines).
+            # The task runs in its own session; signal all of it. infretis's
+            # engines start their MD program in a session of their own, which
+            # this does not reach: its worker stops the program on SIGTERM.
             try:
                 os.killpg(proc.pid, signal.SIGTERM)
             except ProcessLookupError:

@@ -1,5 +1,5 @@
 # Pinned for all runs (ASSUMPTIONS.md). Install with scripts/setup-venv.sh.
-infretis @ git+https://github.com/GUTSframework/infretis@0ebf16e382ad7fd62000c33dd38f46b98f79e74e
+infretis @ git+https://github.com/GUTSframework/infretis@bf813ee355bd91f4c78f8303a8f627f0e0808d2e
 inftools @ git+https://github.com/infretis/inftools@ca33eae4258213f0cf526881918a643b8c5cc2ff
 # Python client; must match the hq binary (flake.nix, scripts/get-hq.sh).
 hyperqueue==0.26.2

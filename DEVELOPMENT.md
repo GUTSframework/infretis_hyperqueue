@@ -147,7 +147,7 @@ sequenceDiagram
     X->>R: the future's result (the first result wins)
     R->>R: treat_output: path files, infretis_data.txt,<br/>restart.toml last
     R->>X: submit the next move
-    Note over R,T: SIGTERM waits until treat_output is done, then the launcher<br/>cancels the moves in flight and exits 3. The next link<br/>redoes them from restart.toml's locked list.
+    Note over R,T: SIGTERM waits until treat_output is done, then infretis<br/>cancels the moves in flight and the launcher exits 3. The next<br/>link redoes them from restart.toml's locked list.
 ```
 
 ## Layout
@@ -231,17 +231,18 @@ HQ_SERVER_DIR=... .venv/bin/python -m gutsrun_infretis.launcher \
 or `bench/bare_run.py ... --runner gutsrun [--backend hq]`. The launcher
 passes infretis a `TaskExecutor` factory (`executor_factory`, a hook in the
 GUTS fork, `requirements.txt`), which runs infretis's own worker
-initializer before every move. The fork does what used to be patched in
-here: the initializer needs no shared state, each move logs to
-`worker{pin}.log`, the workers leave the shared GROMACS inputs alone (the
-parent writes them once at setup, and refuses engines that share an
-`input_path` with different settings), infretis stops gracefully on
+initializer before every move. In the fork, the initializer needs no
+shared state, each move logs to `worker{pin}.log`, the workers leave the
+shared GROMACS inputs alone (the parent writes them once at setup, and
+refuses engines that share an `input_path` with different settings) and
+stop their MD program on SIGTERM, infretis stops gracefully on
 SIGTERM/SIGINT (after the result it is recording, `restart.toml` last),
 and a refused setup logs why. The launcher adds, for this run only: a
 `restart.toml` backup at start, and under HQ a check of `wmdrun`: no
 pinning flags (HQ places the tasks), and `-ntomp` equal to
 `--cores-per-task`; a `wmdrun` that fails it is refused, not rewritten. At start it refuses an
-infretis without the `executor_factory` hook or the graceful stop. The
+infretis without the `executor_factory` hook, the graceful stop, the
+GROMACS inputs written at setup or the workers' SIGTERM handling. The
 fork's other fixes (atomic `restart.toml`, no busy spin in the parent,
 restarts from the run's seed) apply to bare runs too. Exit codes: 0 done
 (or nothing to do), 1 an error (traceback in `gutsrun.log` and on

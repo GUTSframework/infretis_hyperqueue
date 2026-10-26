@@ -7,7 +7,7 @@ What this repo takes as given. If one turns out wrong, update this file
 
 | What | Pin | Why |
 |---|---|---|
-| infretis | GUTS fork, branch `guts`, git `0ebf16e`: upstream `a42e039` (main, 2026-05-26; reports version 2026.1.1) plus ten changes meant for upstream | PyPI 2026.1.1 and `main` differ in move physics; infentory installs from `main` (the code and the measurements name one version). The changes: restarts from the run's seed, atomic `restart.toml`, no busy spin, an import-order bug, seeded ASE velocities, the `executor_factory` hook, worker logs by pin without shared state, a graceful stop on SIGTERM/SIGINT, GROMACS's shared inputs written once at setup, and a finished run refused before setup changes it |
+| infretis | GUTS fork, branch `guts`, git `bf813ee`: upstream `a42e039` (main, 2026-05-26; reports version 2026.1.1) plus eleven changes meant for upstream | PyPI 2026.1.1 and `main` differ in move physics; infentory installs from `main` (the code and the measurements name one version). The changes: restarts from the run's seed, atomic `restart.toml`, no busy spin, an import-order bug, seeded ASE velocities, the `executor_factory` hook, workers that stop their MD program on SIGTERM, worker logs by pin without shared state, a graceful stop on SIGTERM/SIGINT, GROMACS's shared inputs written once at setup, and a finished run refused before setup changes it |
 | inftools | git `ca33eae` (main, 2026-09-25) | `infinit`, WHAM analysis |
 | Python | 3.12 | infretis pins numpy < 2; numpy 1.26.4 has no 3.13 wheel |
 | numpy | 1.26.4 | from infretis (`^1.21.2`) |
@@ -30,8 +30,8 @@ Exact Python package versions: `requirements-lock.txt`.
 - `restart.toml` is the only restart authority: no HQ `--journal` for chained
   runs, a fresh `HQ_SERVER_DIR` per Slurm job.
 - infretis comes from the GUTS fork: upstream plus fixes offered upstream,
-  nothing gutsrun-specific. gutsrun-specific changes (graceful stop,
-  GROMACS input handling) stay in the launcher.
+  nothing gutsrun-specific. The launcher adds only checks for this run
+  (`restart.toml` backup, `wmdrun` under HQ, the infretis it needs).
 - Tasks carry paths and indices, never data.
 - One node per MD move; HQ multi-node tasks are experimental.
 

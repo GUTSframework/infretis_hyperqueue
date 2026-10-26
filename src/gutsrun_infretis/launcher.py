@@ -8,18 +8,19 @@ infretis pinned in requirements.txt (the GUTS fork, branch `guts`): its
 `scheduler` takes an `executor_factory`, through which the launcher passes
 a factory that returns a gutsrun TaskExecutor; its worker initializer
 needs no shared state, its moves log to `worker{pin}.log`, its workers
-leave the shared GROMACS inputs alone, and it stops gracefully on SIGTERM
-and SIGINT. What the launcher adds, for this run only:
+leave the shared GROMACS inputs alone and stop their MD program on
+SIGTERM, and it stops gracefully on SIGTERM and SIGINT. What the launcher
+adds, for this run only:
 
 - `restart.toml` is backed up and parse-checked at start.
-- Under HQ, a `wmdrun` with `-pin`/`-pinoffset`/`-pinstride` is refused
+- Under HQ, a `wmdrun` with `-pin on|auto`/`-pinoffset`/`-pinstride` is refused
   (HQ places tasks, so fixed offsets would put moves on the same cores),
   and so is one whose `-ntomp` differs from --cores-per-task (HQ sets
   OMP_NUM_THREADS to it; GROMACS aborts on a mismatch).
 - A stop signal that comes before infretis's scheduler takes over the
-  signals, or after it gave them back, also stops the run; later ones
-  are ignored (`scancel` signals every process of the job, and the link
-  passes on a second copy).
+  signals also stops the run. Once the scheduler has returned, and after
+  the first stop, stop signals are ignored (`scancel` signals every
+  process of the job, and the link passes on a second copy).
 
 Exit codes: 0 = all steps done, 3 = stopped by a signal (restart from
 restart.toml), 4 = infretis refused to start (its reason on stderr and in
@@ -41,15 +42,17 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
+import infretis.asyncrunner
 import infretis.scheduler
 import tomli
+from infretis.classes.engines.factory import create_engines
 from infretis.scheduler import scheduler
 from infretis.setup import setup_config
 
 from gutsrun import TaskExecutor
 from gutsrun.backends import Backend
 
-TESTED_COMMIT = "0ebf16e"  # the fork's commit in requirements.txt
+TESTED_COMMIT = "bf813ee"  # the fork's commit in requirements.txt
 EXIT_DONE, EXIT_STOPPED, EXIT_REFUSED = 0, 3, 4
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
@@ -95,30 +98,46 @@ def infretis_commit() -> str | None:
     return info.get("vcs_info", {}).get("commit_id")
 
 
+def missing_features() -> list[str]:
+    """What the launcher relies on and the installed infretis lacks."""
+    checks = {
+        "the executor_factory hook":
+            "executor_factory" in inspect.signature(scheduler).parameters,
+        "the graceful stop": hasattr(infretis.scheduler, "StopRequest"),
+        "GROMACS inputs written once at setup":
+            "write_inputs" in inspect.signature(create_engines).parameters,
+        "workers that stop their MD program on SIGTERM":
+            hasattr(infretis.asyncrunner, "WorkerTerminated"),
+    }
+    return [name for name, present in checks.items() if not present]
+
+
 def check_infretis() -> None:
-    """Exit if infretis lacks what the launcher relies on: the
-    `executor_factory` hook and the graceful stop."""
+    """Exit if infretis lacks what the launcher relies on (missing_features)."""
     commit = infretis_commit()
     log.info("infretis commit %s (tested: %s)", commit, TESTED_COMMIT)
-    if ("executor_factory" not in inspect.signature(scheduler).parameters
-            or not hasattr(infretis.scheduler, "StopRequest")):
-        sys.exit(f"infretis {commit or '(unknown version)'} lacks the executor_factory "
-                 f"hook or the graceful stop. Install the infretis pinned in "
-                 f"requirements.txt ({TESTED_COMMIT}); in an existing .venv, pip keeps "
-                 "the old one because the version number is the same: add "
-                 "--force-reinstall.")
+    if missing := missing_features():
+        sys.exit(f"infretis {commit or '(unknown version)'} lacks {', '.join(missing)}. "
+                 f"Install the infretis pinned in requirements.txt ({TESTED_COMMIT}); "
+                 "in an existing .venv, pip keeps the old one because the version "
+                 "number is the same: add --force-reinstall.")
 
 
 def stop_once(signum: int, frame: FrameType | None) -> None:
-    """Outside infretis's scheduler: stop, and ignore further stop signals
-    to the exit (also while Python shuts down, which restores default
-    handlers, not SIG_IGN)."""
-    for sig in STOP_SIGNALS:
-        signal.signal(sig, signal.SIG_IGN)
+    """Before infretis's scheduler runs: stop, and ignore further stop
+    signals to the exit."""
+    ignore_stop_signals()
     raise Stop(signal.Signals(signum).name)
 
 
-PINNING = re.compile(r"(?<!\S)-pin(offset|stride)?(?!\S)")
+def ignore_stop_signals() -> None:
+    """Ignore stop signals to the exit (also while Python shuts down, which
+    restores default handlers, not SIG_IGN)."""
+    for sig in STOP_SIGNALS:
+        signal.signal(sig, signal.SIG_IGN)
+
+
+PINNING = re.compile(r"(?<!\S)(-pin\s+(on|auto)|-pinoffset|-pinstride)(?!\S)")
 
 
 def check_wmdrun(wmdrun: list, cores: int) -> None:
@@ -128,9 +147,9 @@ def check_wmdrun(wmdrun: list, cores: int) -> None:
         if not isinstance(cmd, str):
             continue  # LAMMPS and ASE examples use placeholders
         if m := PINNING.search(cmd):
-            sys.exit(f"wmdrun has {m.group()} in {cmd!r}: under HQ, remove -pin, "
-                     "-pinoffset and -pinstride; HQ places the tasks, and fixed "
-                     "offsets would put moves on the same cores")
+            sys.exit(f"wmdrun has {m.group()} in {cmd!r}: under HQ, use -pin off "
+                     "and no -pinoffset or -pinstride; HQ places the tasks, and "
+                     "fixed offsets would put moves on the same cores")
         m = re.search(r"-ntomp\s+(\d+)", cmd)
         if m and int(m.group(1)) != cores:
             sys.exit(f"wmdrun has -ntomp {m.group(1)} but --cores-per-task is {cores}; "
@@ -240,10 +259,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.backend == "hq" and "wmdrun" in config["runner"]:
             check_wmdrun(config["runner"]["wmdrun"], args.cores_per_task)
         stopped = scheduler(config, executor_factory=factory)
+        ignore_stop_signals()
         if stopped is None:
             return EXIT_DONE
-        for sig in STOP_SIGNALS:
-            signal.signal(sig, signal.SIG_IGN)
         raise Stop(signal.Signals(stopped).name)
     except Stop as s:
         text = f"stopped by {s}; moves not yet saved are redone after the restart"
@@ -254,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         log.exception("run failed")
         raise
     finally:
+        ignore_stop_signals()  # a late signal must not interrupt the shutdown
         for ex in EXECUTORS:
             ex.shutdown(wait=False, cancel_futures=True)
 

@@ -68,9 +68,11 @@ def path_numbers(rundir):
 
 def test_check_wmdrun():
     check_wmdrun(["gmx mdrun -ntomp 2 -ntmpi 1", 1], 2)
-    for flag in ("-pin on", "-pinoffset 4", "-pinstride 1"):
-        with pytest.raises(SystemExit, match=f"wmdrun has {flag.split()[0]} in"):
+    for flag, shown in [("-pin on", "-pin on"), ("-pin auto", "-pin auto"),
+                        ("-pinoffset 4", "-pinoffset"), ("-pinstride 1", "-pinstride")]:
+        with pytest.raises(SystemExit, match=f"wmdrun has {shown} in"):
             check_wmdrun([f"gmx mdrun -ntomp 2 {flag}"], 2)
+    check_wmdrun(["gmx mdrun -ntomp 2 -pin off"], 2)  # does not pin
     with pytest.raises(SystemExit, match="-ntomp 2 but --cores-per-task is 4"):
         check_wmdrun(["gmx mdrun -ntomp 2 -ntmpi 1"], 4)
     check_wmdrun(["gmx_pin mdrun -ntomp 2 -deffnm x-pin"], 2)  # not flags
@@ -83,6 +85,20 @@ def test_infretis_without_executor_hook_refused(monkeypatch):
     launcher.check_infretis()  # the pinned one passes
     monkeypatch.setattr(launcher, "scheduler", lambda config: None)
     with pytest.raises(SystemExit, match="lacks the executor_factory hook"):
+        launcher.check_infretis()
+
+
+def test_infretis_without_the_later_fixes_refused(monkeypatch):
+    """An infretis with the hook and the graceful stop, but whose workers
+    rewrite the GROMACS inputs or leave MD programs running, cannot run."""
+    import infretis.asyncrunner
+
+    from gutsrun_infretis import launcher
+
+    monkeypatch.setattr(launcher, "create_engines", lambda config: None)
+    monkeypatch.delattr(infretis.asyncrunner, "WorkerTerminated")
+    with pytest.raises(SystemExit, match="lacks GROMACS inputs written once at setup, "
+                                         "workers that stop their MD program"):
         launcher.check_infretis()
 
 
