@@ -152,9 +152,12 @@ class TaskExecutor(Executor):
     # --- internals ------------------------------------------------------------
 
     def _take_over_spool(self) -> None:
-        """Remove the directories of older executors. Their tasks, if any
-        still run (a killed launcher on a long-lived HQ server), then fail
-        without running or publishing: their input and out/ are gone."""
+        """Remove the directories of older executors (left by a killed
+        launcher on a long-lived HQ server). Their queued tasks then fail
+        without running: their input is gone. A task that already runs
+        keeps running its call and fails only when it publishes. A
+        directory whose files are still open may stay behind (NFS); a
+        later executor removes it."""
         for d in self.spool.iterdir():
             if d.is_dir() and d != self.dir:
                 shutil.rmtree(d, ignore_errors=True)

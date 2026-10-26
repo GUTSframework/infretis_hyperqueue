@@ -124,9 +124,9 @@ def test_unpicklable_result(make_executor):
         fut.result(timeout=60)
 
 
-def test_task_of_a_taken_over_spool_does_nothing(tmp_path):
-    """A task whose executor's directory a newer executor removed neither
-    runs nor publishes."""
+def test_queued_task_of_a_taken_over_spool_does_not_run(tmp_path):
+    """A task that had not started when a newer executor removed its
+    executor's directory does not run."""
     from gutsrun import task
     from gutsrun.backends.local import LocalBackend
 

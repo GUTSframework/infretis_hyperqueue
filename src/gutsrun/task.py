@@ -2,15 +2,15 @@
 
 Loads `in/<tid>.pkl`, runs the initializer and then the call, and writes
 `out/<tid>.<instance>.pkl`: ("ok", value) or ("err", exception, traceback
-text). An
-exception in the call is a result, not a failure: the process still exits
-0. A non-zero exit means the task itself broke.
+text). An exception in the call is a result, not a failure: the process
+still exits 0. A non-zero exit means the task itself broke.
 
 The instance is HQ_INSTANCE_ID under HyperQueue (it goes up when HQ reruns
 the task after a worker crash), GUTSRUN_INSTANCE under the local backend.
 
 If a newer executor took over the spool, this executor's directory is
-gone: the task fails before running (no input) or when publishing.
+gone: a task that had not started fails before running (no input); one
+that had runs its call and fails when publishing.
 """
 
 import os

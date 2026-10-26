@@ -195,10 +195,14 @@ fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})
 - **Spool directory**, one subdirectory per executor instance: `in/`
   holds the pickled calls, `out/` the results (`<tid>.<instance>.pkl`,
   temp + rename), `log/` stdout/stderr. A new executor deletes the older
-  subdirectories, so tasks of an older executor (still running after a
-  killed launcher on a long-lived HQ server) neither start nor publish.
-  In a chain this cannot happen: each link has a fresh HQ server, and
-  Slurm ends a link's tasks with its job.
+  subdirectories, so a queued task of an older executor (after a killed
+  launcher on a long-lived HQ server) fails without running. One that
+  already runs keeps running its move in `worker{pin}/` and fails only
+  when it publishes: cancel such tasks (`hq job cancel all`) before
+  starting a launcher on that server. A directory a stale task still has
+  files open in can stay behind (on NFS, as `.nfs*` files) until a later
+  executor removes it. In a chain none of this happens: each link has a
+  fresh HQ server, and Slurm ends a link's tasks with its job.
 - **Completion** from result files (listed every 20 ms). Failures from the
   backend every 2 s (HQ: one batched `get_failed_tasks` call). The first
   result for a task wins; later ones are deleted. Files of finished
