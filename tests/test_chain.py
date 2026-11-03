@@ -376,16 +376,12 @@ def test_status_reports_progress_and_each_link(project, monkeypatch, capsys):
     assert "ended" in report.links[0] and STOPPED_BY_SIGNAL in report.links[0]
     assert report.links[1].endswith("PENDING 0:00 (Dependency)")
     assert "job 1001" in report.links[1]
-    assert report.states == ["1 ended", "2 PENDING (Dependency)"]
-    # The job's time is not part of its state.
-    project.use_fakes(monkeypatch, squeue="1001 PENDING 0:30 (Dependency)")
-    assert status(spec).states == report.states
 
     project.use_fakes(monkeypatch, squeue="")
     report = status(spec)
-    assert not report.active and report.links[1].endswith("cancelled before it started")
-    assert report.over is not None
-    assert report.over.startswith(f"link 2 was cancelled before it started; see {spec.dir}/link1-")
+    assert not report.active and report.links[1].endswith("not in the queue, no end recorded")
+    assert report.over == (
+        f"link 2 recorded no end (cancelled or killed); see {spec.dir}/link2-1001.out")
     follow(spec, interval=0)  # returns: nothing left in the queue
     assert "chain over: link 2" in capsys.readouterr().out
 
@@ -411,37 +407,29 @@ def test_why_a_chain_is_over(project):
     assert why_over(spec, [{"event": "chain"}]) == "no link was submitted"
     assert why_over(spec, [submitted(1), started(1), ended(1, "done")]) == "the run is done"
     assert why_over(spec, [*walltime, started(2), ended(2, STOPPED_BY_SIGNAL)]) == (
-        "all 2 links ran; `submit` again to continue")
-    assert why_over(dataclasses.replace(spec, links=1),
-                    [submitted(1), started(1), ended(1, STOPPED_BY_SIGNAL)]) == (
-        "its only link ran; `submit` again to continue")
+        "link 2 stopped at the walltime, the last link; `submit` again to continue")
     assert why_over(spec, [*walltime, started(2), ended(2, "failed (exit 1)")]) == (
         f"link 2: failed (exit 1); see {spec.dir}/link2-2.out")
     # The last link, not the last "ended" event, says why.
-    assert why_over(spec, [*walltime, started(2)]) == (
-        f"link 2 gone without a word after starting on node1; see {spec.dir}/link2-2.out")
-    assert why_over(spec, walltime) == (
-        f"link 2 was cancelled before it started; see {spec.dir}/link1-1.out")
+    for record in ([*walltime, started(2)], walltime):
+        assert why_over(spec, record) == (
+            f"link 2 recorded no end (cancelled or killed); see {spec.dir}/link2-2.out")
     spec.stop_file.touch()
     assert why_over(spec, walltime).startswith("stopped by request")
     # Done wins over a stop that came after the end.
     assert why_over(spec, [*walltime, started(2), ended(2, "done")]) == "the run is done"
 
 
-def test_follow_shows_progress_that_changed_inside_the_quiet_window(project, monkeypatch):
+def test_follow_prints_each_change_until_the_chain_is_over(project, monkeypatch):
     spec = project.make_spec()
-    clock = [0.0]
-    progress = ["step 1", "step 2", "step 2", "step 2", "step 2"]
-    reports = iter([Report(p, [], ["1 RUNNING"], None, True) for p in progress]
-                   + [Report("step 2", [], ["1 ended"], "done", False)])
+    reports = iter([Report("step 1", [], None, True), Report("step 1", [], None, True),
+                    Report("step 2", [], None, True), Report("step 2", [], "done", False)])
     printed = []
     monkeypatch.setattr(chain, "status", lambda _spec: next(reports))
-    monkeypatch.setattr(chain.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(chain.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(chain.time, "sleep", lambda _s: None)
     monkeypatch.setattr("builtins.print", lambda *a, **_: printed.append(a[1]))
-    follow(spec, interval=100, progress_every=300)
-    # t=0 first report; t=100 step 2 is too soon; t=300 shows it; t=500 the end.
-    assert printed == ["step 1", "step 2", "step 2"]
+    follow(spec)
+    assert printed == ["step 1", "step 2", "step 2"]  # the repeat is not printed
 
 
 def test_stop_cancels_queued_links_and_signals_the_running_one(project, monkeypatch):
@@ -566,13 +554,13 @@ def test_status_exit_code_says_whether_the_chain_is_active(project, monkeypatch,
         cli.main(["status", str(project.rundir)])
     assert stopped.value.code == 0
     text = capsys.readouterr().out
-    assert "cancelled before it started" in text
+    assert "not in the queue, no end recorded" in text
     with pytest.raises(SystemExit) as stopped:
         cli.main(["status", "--json", str(project.rundir)])
     assert stopped.value.code == 0
     report = json.loads(capsys.readouterr().out)
     assert report["lines"] == text.splitlines()
-    assert report["states"] == ["1 cancelled"] and report["active"] is False
+    assert report["over"].startswith("link 1 recorded no end") and report["active"] is False
 
 
 def test_bench_workload_imports_from_bench(project):

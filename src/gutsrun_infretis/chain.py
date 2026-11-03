@@ -176,13 +176,11 @@ def main(argv: list[str] | None = None) -> None:
                    f"{EXIT_ACTIVE} while some are (or squeue does not answer)")
     how = stat.add_mutually_exclusive_group()
     how.add_argument("--follow", action="store_true",
-                     help="print it again when a link's state changes, and every 5 minutes "
-                          "while the run progresses, until the chain ends")
+                     help="print it again whenever it changes, until the chain ends")
     how.add_argument("--json", action="store_true",
-                     help="print one JSON object, for scripts: progress, links, states "
-                          "(per link, its state without times: compare these to spot "
-                          "changes), over (null while active), active, and lines (the "
-                          "report as text)")
+                     help="print one JSON object, for scripts: progress, links (one line "
+                          "each), over (null while active), active, and lines (the report "
+                          "as text)")
     stat.add_argument("--interval", type=float, default=30, help="seconds between checks")
 
     halt = commands.add_parser("stop", help="stop the chain in the run directory")

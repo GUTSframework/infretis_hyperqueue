@@ -111,7 +111,7 @@ export PATH=~/infretis_hyperqueue/.venv/bin:$PATH
 
 ```bash
 gutsrun-infretis status            # where the run is, and each link's job
-gutsrun-infretis status --follow   # again whenever a link changes, until the end
+gutsrun-infretis status --follow   # again whenever it changes, until the end
 gutsrun-infretis stop              # stop the chain; restart.toml stays valid
 ```
 

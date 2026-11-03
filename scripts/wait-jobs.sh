@@ -5,7 +5,7 @@
 #        scripts/wait-jobs.sh [--pull] <host> --run <rundir>
 #
 # Polls <host> over ssh every $INTERVAL s (default 30), printing what it sees
-# whenever that changes (for --run: a link's state; not the times and steps):
+# whenever that changes (for --run: when a link is added or the chain ends):
 #
 # - With job ids, or none: `squeue`, for those jobs or all of yours there.
 #   When none is left it prints the jobs' final state (sacct, if the site
@@ -71,8 +71,8 @@ while :; do
             exit 1
         fi
         if [ -n "$rundir" ]; then
-            # The links' states, without times and steps.
-            new_key="$(jq -c .states <<<"$out")"
+            # Not every change: a running link's time and steps change at every poll.
+            new_key="$(jq -c '[(.links | length), .over]' <<<"$out")"
             if [ "$new_key" != "$key" ] || [ "$rc" = 0 ]; then
                 echo "$(date +%H:%M:%S)"
                 jq -r '.lines[]' <<<"$out" | sed 's/^/    /'
