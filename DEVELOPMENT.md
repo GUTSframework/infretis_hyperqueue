@@ -29,95 +29,90 @@ meant to grow into the shared GUTS HPC packages. Only the adapter
 ### Where things run
 
 One link is one Slurm job. Everything that must outlive a job lives in the
-run directory on the shared file system; everything else (HQ) is
-started fresh by each link.
+run directory on the shared file system; HQ is started fresh by each link.
+Arrows are processes starting, signalling or talking to each other, and
+files read or written.
 
 ```mermaid
 flowchart LR
     subgraph login["login node"]
         cmd["gutsrun-infretis<br/>submit, status, stop"]
     end
-    subgraph job["compute node: one link"]
-        link["python -m gutsrun.chain link<br/>(standard library only)"]
-        hqs["HQ server"]
-        hqw["HQ worker"]
-        launcher["launcher process:<br/>infretis MC loop + TaskExecutor"]
-        task["task processes:<br/>python -m gutsrun.task, then lmp or gmx"]
+    subgraph first["first node of the link's Slurm job"]
+        link["link<br/>python -m gutsrun.chain link"]
+        hqs["hq server"]
+        hqw["hq worker"]
+        launcher["launcher<br/>infretis MC loop + TaskExecutor"]
+        task["task processes<br/>python -m gutsrun.task:<br/>one move each, running lmp or gmx"]
     end
-    subgraph more["other nodes, if nodes > 1"]
-        hqw2["HQ worker"]
-    end
-    subgraph shared["run directory, shared FS"]
-        state["infretis.toml, restart.toml, load/,<br/>infretis_data.txt, workerN/"]
+    more["other nodes, if nodes > 1:<br/>an hq worker and its task processes,<br/>as on the first node"]
+    next["next link<br/>(queued: afterany this one)"]
+    subgraph shared["run directory, shared file system"]
         chainfiles[".gutsrun/: chain.json, links.jsonl,<br/>link and HQ logs"]
-        spooldir["gutsrun-spool/: calls in, results out"]
+        spooldir["gutsrun-spool/: calls, results,<br/>logs of failed moves"]
+        state["infretis.toml, restart.toml, load/,<br/>infretis_data.txt, worker{pin}/"]
     end
 
-    cmd -- "sbatch link 1" --> link
+    cmd -- "sbatch link 1;<br/>stop: scancel --batch" --> link
     cmd -- "reads" --> chainfiles
-    link -- "sbatch next link (afterany)" --> link
+    link -- "sbatch" --> next
     link -- "starts" --> hqs & hqw
-    link -- "srun" --> hqw2
-    link -- "runs, passes SIGTERM on" --> launcher
+    link -- "srun" --> more
+    link -- "starts, passes SIGTERM on" --> launcher
     link -- "writes" --> chainfiles
-    launcher -- "one HQ job per move" --> hqs
-    hqs --> hqw & hqw2
+    launcher -- "hq submit per move,<br/>hq job cancel" --> hqs
+    hqs -- "task events<br/>(hq journal stream)" --> launcher
+    hqs --> hqw & more
     hqw -- "starts" --> task
-    launcher <-- "pickled calls and results" --> spooldir
-    task <--> spooldir
+    launcher -- "calls, results" --- spooldir
+    task -- "calls, results" --- spooldir
     task -- "MD files" --> state
-    launcher -- "treat_output: paths, data, restart.toml" --> state
+    launcher -- "treat_output: paths, data,<br/>restart.toml last" --> state
 ```
+
+Without a chain (`python -m gutsrun_infretis.launcher` on a laptop), there
+is no link: the launcher starts an hq server and one worker itself, in
+`gutsrun-hq/` of the run directory, and stops them at its end.
 
 ### Modules
 
-Arrows mean "calls or imports". Nothing in `gutsrun` imports the adapter or
-infretis: a task process reaches the adapter only by unpickling the call it
-was given (dotted arrow).
+Arrows are imports. Nothing in `gutsrun` imports the adapter or infretis,
+and `task.py` imports nothing at all: a task process reaches infretis only
+by unpickling the call it was given (the dotted arrow). The launcher
+imports `gutsrun.chain` only for `ROOT`, the checkout that holds `bin/hq`.
+Which processes start which: [Where things run](#where-things-run).
 
 ```mermaid
 flowchart TB
     subgraph adapter["gutsrun_infretis: adapter"]
-        ichain["chain.py<br/>InfretisRun workload,<br/>gutsrun-infretis command"]
+        ichain["chain.py<br/>InfretisRun workload,<br/>the gutsrun-infretis command"]
         launcher["launcher.py<br/>executor factory, checks,<br/>exit codes"]
     end
     subgraph generic["gutsrun: generic, no MD"]
-        gchain["chain.py<br/>chain of links, workloads"]
-        ghq["hq.py<br/>HQ server and workers in a job,<br/>HQBackend: tasks through the hq CLI"]
-        gsite["site.py<br/>sites/*.toml, setup"]
+        gchain["chain.py<br/>the chain of links, Workload"]
+        gsite["site.py<br/>sites/*.toml, setup lines"]
+        ghq["hq.py<br/>HQ in a Slurm job,<br/>HQBackend: the hq CLI"]
         executor["executor.py<br/>TaskExecutor, Backend, Resources"]
         task["task.py<br/>one task process"]
     end
     subgraph infretis["infretis, GUTS fork"]
-        sched["scheduler, asyncrunner<br/>executor_factory hook, graceful stop"]
-        repex["REPEX_state<br/>pick, treat_output, restart.toml"]
-        engines["core.tis.run_md, engines"]
+        sched["scheduler.scheduler<br/>executor_factory hook, graceful stop"]
+        setup["setup.setup_config"]
+        runmd["core.tis.run_md, engines"]
     end
-    hq["HyperQueue<br/>hq binary"]
-    sl["Slurm<br/>sbatch, srun, scancel"]
 
-    ichain --> gchain
-    gchain --> gsite
-    gchain --> ghq
-    gchain --> sl
-    ghq -- "starts server and workers" --> hq
-    gchain -- "link runs the workload's argv" --> launcher
-    launcher -- "scheduler(config, executor_factory)" --> sched
-    launcher -- "wraps treat_output" --> repex
-    launcher -- "subclasses" --> executor
-    sched --> repex
-    sched -- "submit(partial(run_md, md_items))" --> executor
-    executor -- "HQBackend" --> ghq
-    ghq -- "hq submit, hq journal stream" --> hq
-    hq --> task
-    task -. "unpickles and runs" .-> worker
-    worker --> engines
+    ichain --> gchain & gsite
+    launcher --> gchain & ghq & executor
+    launcher --> sched & setup
+    gchain --> ghq & gsite
+    ghq --> executor
+    task -. "unpickles and runs" .-> runmd
 ```
 
 ### One move
 
-What happens between infretis picking a move and saving its result,
-each one an HQ task.
+What happens between infretis picking a move and saving its result. Each
+move is one HQ task of the link's HQ job.
 
 ```mermaid
 sequenceDiagram
@@ -134,12 +129,19 @@ sequenceDiagram
     H->>T: starts it on a worker, with its cores
     T->>S: read in/{tid}.pkl
     T->>T: worker_initializer: build the engines<br/>run_md: logs to worker{pin}.log, runs lmp or gmx
-    T->>S: out/{tid}.pkl
-    H->>X: task-finished, in hq journal stream
-    X->>S: read out/{tid}.pkl
-    X->>R: the future's result
-    R->>R: treat_output: path files, infretis_data.txt,<br/>restart.toml last
-    R->>X: submit the next move
+    alt the move returns
+        T->>S: out/{tid}.pkl
+        H->>X: task-finished, in hq journal stream
+        X->>S: read out/{tid}.pkl
+        X->>R: the future's result
+        R->>R: treat_output: path files, infretis_data.txt,<br/>restart.toml last
+        R->>X: submit the next move
+    else the move raises
+        T->>H: end of the traceback in $HQ_ERROR_FILENAME, exit 1
+        H->>X: task-failed with that text, in hq journal stream
+        X->>R: the future fails: TaskFailed
+        Note over R: infretis ends the run (exit 1),<br/>and the chain stops
+    end
     Note over R,T: SIGTERM waits until treat_output is done, then infretis<br/>cancels the moves in flight and the launcher exits 3. The next<br/>link redoes them from restart.toml's locked list.
 ```
 
