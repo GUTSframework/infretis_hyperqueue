@@ -20,7 +20,6 @@ import gutsrun_infretis.chain as cli
 from gutsrun.chain import (
     STOPPED_BY_SIGNAL,
     ChainError,
-    Forwarder,
     Report,
     Spec,
     StateError,
@@ -351,27 +350,6 @@ def test_a_crashing_link_ends_in_the_record_and_cancels_the_next(project):
     assert project.calls("scancel") == ["scancel 1001"]
     [ended] = [e for e in events(spec) if e["event"] == "ended"]
     assert ended["result"] == "crashed: RuntimeError: boom"
-
-
-def test_a_signal_while_the_workload_starts_is_passed_on(monkeypatch):
-    # The signal lands after run_link checked `received`, inside Popen.
-    popen = subprocess.Popen
-
-    def popen_after_a_signal(*args, **kwargs):
-        os.kill(os.getpid(), signal.SIGTERM)
-        return popen(*args, **kwargs)
-
-    handlers = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT)}
-    try:
-        forwarder = Forwarder()
-        monkeypatch.setattr(subprocess, "Popen", popen_after_a_signal)
-        child = forwarder.start([sys.executable, "-c", "import time; time.sleep(30)"])
-        monkeypatch.undo()
-        assert forwarder.received == "SIGTERM"
-        assert child.wait(timeout=10) == -signal.SIGTERM
-    finally:
-        for s, handler in handlers.items():
-            signal.signal(s, handler)
 
 
 def test_revision_without_git(tmp_path, monkeypatch):

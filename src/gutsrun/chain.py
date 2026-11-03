@@ -546,7 +546,6 @@ class Forwarder:
     def __init__(self) -> None:
         self.child: subprocess.Popen[bytes] | None = None
         self.received: str | None = None
-        self.forwarded = False
         for signum in (signal.SIGTERM, signal.SIGINT):
             signal.signal(signum, self.handle)
 
@@ -554,19 +553,14 @@ class Forwarder:
         self.received = signal.Signals(signum).name
         log.info(f"{self.received}: stopping the workload")
         if self.child is not None:
-            self.forwarded = True
             self.child.send_signal(signum)
 
     def start(self, argv: list[str], cwd: Path | None = None,
               env: dict[str, str] | None = None) -> subprocess.Popen[bytes]:
-        """Start the workload. A signal that arrives while it starts, after
-        `received` was last checked but before `child` is set, is passed
-        on here; only once: one request, one signal."""
-        child = self.child = subprocess.Popen(argv, cwd=cwd, env=env)
-        if self.received is not None and not self.forwarded:
-            self.forwarded = True
-            child.send_signal(signal.Signals[self.received])
-        return child
+        """Start the workload. A signal in the moment while it starts is
+        lost: the workload then runs on until the walltime signal."""
+        self.child = subprocess.Popen(argv, cwd=cwd, env=env)
+        return self.child
 
 
 def run_link(spec_path: str | Path, link: int) -> int:
