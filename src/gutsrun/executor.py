@@ -236,6 +236,8 @@ class TaskExecutor(Executor):
             except Exception as e:
                 failed = TaskFailed(f"task {tid}: unreadable result: {e!r}")
             del self._finished[tid]
+            if failed is None and now > since:  # not visible at the first read
+                log.info(f"task {tid}: result visible {now - since:.2f} s after it finished")
             self._deliver(tid, failed, value)
 
     def _deliver(self, tid: str, failed: TaskFailed | None, value: Any) -> None:

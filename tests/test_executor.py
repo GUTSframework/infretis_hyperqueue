@@ -109,9 +109,9 @@ class Ends:
         pass
 
 
-def test_a_result_that_shows_late_is_still_read(tmp_path):
+def test_a_result_that_shows_late_is_still_read(tmp_path, caplog):
     """On a shared file system the result file may show up after the
-    backend reports the task finished."""
+    backend reports the task finished; the log says how late."""
     backend = Ends()
     ex = TaskExecutor(backend, tmp_path / "spool", poll_interval=0.01)
     try:
@@ -121,6 +121,7 @@ def test_a_result_that_shows_late_is_still_read(tmp_path):
         assert not fut.done()
         (ex.dir / "out" / "00000000.pkl").write_bytes(pickle.dumps(9))
         assert fut.result(timeout=5) == 9
+        assert "task 00000000: result visible" in caplog.text
         assert os.listdir(ex.dir / "out") == os.listdir(ex.dir / "in") == []
         backend.ended.append(("00000000", None))  # a repeated event changes nothing
     finally:
