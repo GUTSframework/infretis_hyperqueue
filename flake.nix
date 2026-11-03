@@ -40,7 +40,7 @@
           pkgs.pyright   # type check (pyproject.toml [tool.pyright])
           pkgs.jq        # scripts/wait-jobs.sh --run reads `status --json`
         ];
-        # Let pip wheels (numpy, mdtraj, the hyperqueue client) find libstdc++
+        # Let pip wheels (numpy, mdtraj) find libstdc++
         # and zlib on NixOS.
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.zlib ];
       };

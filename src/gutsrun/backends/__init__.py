@@ -1,8 +1,11 @@
 """Backends start task processes; the executor does everything else.
 
 A backend gets a task as an argv plus where to run it, and later reports
-which tasks ended. It never sees the call or the result: those travel
-through the spool directory.
+which tasks ended, with the error of the failed ones. It never sees the
+call or the result: those travel through the spool directory.
+
+`gutsrun.hq.HQBackend` runs tasks on HyperQueue, `local.LocalBackend` as
+local processes.
 """
 
 from dataclasses import dataclass, field
@@ -35,22 +38,18 @@ class Resources:
 
 
 class Backend(Protocol):
-    """Starts task processes and reports the ones that failed."""
+    """Starts task processes and reports the ones that ended."""
 
     def submit(self, tid: str, argv: list[str], res: Resources, stdout: str, stderr: str) -> None:
-        """Start (or queue) a task. `stdout`/`stderr` contain `{instance}`."""
+        """Start (or queue) a task. `stdout`/`stderr` contain `{instance}`.
+        The task process finds a file to write its error to in
+        $HQ_ERROR_FILENAME. Logs of tasks that finish are deleted."""
 
     def poll(self) -> list[tuple[str, str | None]]:
         """Tasks that ended since the last call: (tid, None) for a clean
-        exit, (tid, message) for a failure. A backend may only report
-        failures; the executor learns of clean ends from result files."""
+        exit, (tid, message) for a failure, with the error the task wrote
+        if it wrote one."""
         ...
-
-    def release(self, tid: str) -> None:
-        """The executor has the task's result; forget the task."""
-
-    def cancel(self, tid: str) -> None:
-        """Stop a task that is queued or running."""
 
     def close(self) -> None:
         """Cancel what is left and free the backend's resources."""

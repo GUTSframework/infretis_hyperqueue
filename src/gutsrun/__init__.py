@@ -8,7 +8,7 @@ The exports load lazily: every task process imports this package (for
 
 from typing import Any
 
-_EXPORTS = {"TaskExecutor", "TaskFailed", "RemoteTraceback"}
+_EXPORTS = {"TaskExecutor", "TaskFailed"}
 
 
 def __getattr__(name: str) -> Any:

@@ -1,12 +1,13 @@
 """Run one task: `python -m gutsrun.task <executor-dir> <tid>`.
 
 Loads `in/<tid>.pkl`, runs the initializer and then the call, and writes
-`out/<tid>.<instance>.pkl`: ("ok", value) or ("err", exception, traceback
-text). An exception in the call is a result, not a failure: the process
-still exits 0. A non-zero exit means the task itself broke.
+its value to `out/<tid>.pkl`, exit 0. If the call raises, or its value does
+not pickle, the task writes the traceback to stderr and its end to the file
+named in HQ_ERROR_FILENAME (HQ reports that as the task's error), and
+exits 1.
 
-The instance is HQ_INSTANCE_ID under HyperQueue (it goes up when HQ reruns
-the task after a worker crash), GUTSRUN_INSTANCE under the local backend.
+HQ cancels a task with SIGINT to its process group; Python raises
+KeyboardInterrupt for it, so the call unwinds as for any other exception.
 
 If a newer executor took over the spool, this executor's directory is
 gone: a task that had not started fails before running (no input); one
@@ -15,24 +16,28 @@ that had runs its call and fails when publishing.
 
 import os
 import pickle
+import signal
 import sys
 from pathlib import Path
-from typing import Any
 
 from gutsrun import spool
 
+ERROR_LIMIT = 1900  # characters; HQ keeps about 2 KiB of a task's error
 
-def _publish(task_dir: Path, tid: str, result: tuple[Any, ...]) -> None:
-    instance = os.environ.get("HQ_INSTANCE_ID") or os.environ.get("GUTSRUN_INSTANCE", "0")
-    try:
-        data = spool.dump(result)
-    except Exception as e:  # the value or exception does not pickle
-        text = result[2] if result[0] == "err" else ""
-        data = spool.dump(("err", RuntimeError(f"result not picklable: {e!r}"), text))
-    spool.write_atomic(task_dir / "out" / spool.result_name(tid, instance), data)
+
+def _fail(text: str) -> int:
+    sys.stderr.write(text)
+    if path := os.environ.get("HQ_ERROR_FILENAME"):
+        # The end of a traceback says what went wrong; keep that part.
+        if len(text) > ERROR_LIMIT:
+            text = "...\n" + text[-ERROR_LIMIT:]
+        Path(path).write_text(text)
+    return 1
 
 
 def main(argv: list[str]) -> int:
+    # Also where SIGINT was ignored by whoever started the worker.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
     task_dir, tid = Path(argv[0]), argv[1]
     with open(task_dir / "in" / f"{tid}.pkl", "rb") as f:
         # Like multiprocessing's spawn: the caller's sys.path first, so the
@@ -43,16 +48,15 @@ def main(argv: list[str]) -> int:
         call = pickle.load(f)
     fn, args, kwargs, initializer, initargs = call
 
-    result: tuple[Any, ...]
     try:
         if initializer is not None:
             initializer(*initargs)
-        result = ("ok", fn(*args, **kwargs))
-    except BaseException as e:  # noqa: BLE001 - the caller decides
+        data = spool.dump(fn(*args, **kwargs))
+    except BaseException:  # noqa: BLE001 - the caller decides
         import traceback  # only on errors: ~15 ms of every task's start-up
 
-        result = ("err", e, traceback.format_exc())
-    _publish(task_dir, tid, result)
+        return _fail(traceback.format_exc())
+    spool.write_atomic(task_dir / "out" / f"{tid}.pkl", data)
     return 0
 
 

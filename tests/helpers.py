@@ -52,3 +52,12 @@ def slow(started: str, seconds: float, value: Any = None) -> Any:
 def touch(path: str) -> str:
     Path(path).touch()
     return path
+
+
+def long_traceback(msg: str) -> None:
+    """Raise ValueError(msg), caused by a RuntimeError with a 3,000-character
+    message: the traceback is long, and its end is the ValueError."""
+    try:
+        raise RuntimeError("x" * 3000)
+    except RuntimeError as e:
+        raise ValueError(msg) from e

@@ -28,7 +28,7 @@ def wait_for(cond: Callable[[], object], timeout: float = 30.0, interval: float 
 class HQCluster:
     """An `hq server` plus workers as real processes, in a temp server dir."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *worker_args: str) -> None:
         hq = shutil.which("hq")
         assert hq is not None, "no hq binary"
         self.hq = hq
@@ -39,7 +39,7 @@ class HQCluster:
             [self.hq, "server", "start", "--server-dir", str(self.dir)],
             stdout=open(root / "hq-server.log", "wb"), stderr=subprocess.STDOUT)
         wait_for(lambda: (self.dir / "hq-current").exists(), what="hq server")
-        self.add_worker()
+        self.add_worker(*worker_args)
 
     def cli(self, *args: str) -> Any:
         out = subprocess.run([self.hq, *args, "--server-dir", str(self.dir),
@@ -47,11 +47,11 @@ class HQCluster:
                              capture_output=True, text=True, check=True)
         return json.loads(out.stdout)
 
-    def add_worker(self) -> subprocess.Popen[bytes]:
+    def add_worker(self, *args: str) -> subprocess.Popen[bytes]:
         n = len(self.workers)
         proc = subprocess.Popen(
             [self.hq, "worker", "start", "--server-dir", str(self.dir),
-             "--cpus", str(HQ_CPUS)],
+             "--cpus", str(HQ_CPUS), *args],
             stdout=open(self.root / f"hq-worker{n}.log", "wb"), stderr=subprocess.STDOUT)
         self.workers.append(proc)
         alive = sum(1 for w in self.workers if w.poll() is None)
@@ -73,10 +73,6 @@ class HQCluster:
 def hq_cluster(tmp_path: Path) -> Iterator[HQCluster]:
     if shutil.which("hq") is None:
         pytest.skip("no hq binary (run inside `nix develop`)")
-    try:
-        import hyperqueue  # noqa: F401
-    except ImportError as e:
-        pytest.skip(f"HyperQueue client not importable: {e}")
     cluster = HQCluster(tmp_path)
     yield cluster
     cluster.stop()
@@ -95,11 +91,10 @@ def make_executor(request: pytest.FixtureRequest,
         if request.param == "local":
             backend: Backend = LocalBackend(max_workers=kwargs.pop("max_workers", 4))
         else:
-            from gutsrun.backends.hq import HQBackend
+            from gutsrun.hq import HQBackend
             kwargs.pop("max_workers", None)
             assert cluster is not None
-            backend = HQBackend(str(cluster.dir))
-        kwargs.setdefault("failure_poll_interval", 0.2)
+            backend = HQBackend(cluster.dir)
         ex = TaskExecutor(backend, tmp_path / "spool", **kwargs)
         made.append(ex)
         return ex

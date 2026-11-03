@@ -533,12 +533,12 @@ def test_hq_workers_on_the_other_nodes(tmp_path):
     assert json.loads((project.rundir / "hq.json").read_text())["workers"] == 2
     [srun] = project.calls("srun")
     for part in ["--nodes=1", "--ntasks=1", "--ntasks-per-node=1", "--relative=1",
-                 "--cpus-per-task=2", f"-m gutsrun.chain worker {spec.path} 1 "]:
+                 "--cpus-per-task=2", f"--output={spec.dir}/link1-4242-hq-worker-%N.log",
+                 "worker start --server-dir", "--cpus 2"]:
         assert part in srun
-    assert "hq worker started" in out
-    assert "hq worker exit 1, server stopped" in out  # the worker was not killed
-    assert "srun exit 0" in out
-    assert list(spec.dir.glob("link1-4242-hq-worker-*.log"))
+    # Stopping the server ended the worker (HQ exits 1 then); srun was not killed.
+    assert "srun exit 1" in out
+    assert "forcing job termination" not in out
 
 
 # --- the infretis workload and gutsrun-infretis --------------------------------------
@@ -556,6 +556,8 @@ def test_infretis_progress_and_argv(tmp_path):
     progress = run.progress(tmp_path)
     assert not progress.done and progress.text == "step 40 of 100"
     assert run.argv("py", tmp_path, 1)[4] == "restart.toml"
+    assert InfretisRun(time_request="30m").argv("py", tmp_path, 1)[-2:] == [
+        "--time-request", "30m"]
     (tmp_path / "restart.toml").write_text("[current]\ncstep = ")
     with pytest.raises(StateError, match="does not parse"):
         run.progress(tmp_path)
@@ -575,11 +577,12 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
     with pytest.raises(ChainError, match="unknown key 'walltime'"):
         cli.make_spec(rundir, {}, root=project.root)
     (rundir / "gutsrun.toml").write_text(
-        'site = "test"\nlinks = 7\ncores_per_task = 2\nnodes = 3\n')
+        'site = "test"\nlinks = 7\ncores_per_task = 2\nnodes = 3\n'
+            'time_request = "30m"\n')
     spec = cli.make_spec(rundir, {"links": 5, "name": None}, root=project.root)
     assert (spec.links, spec.name, spec.time) == (5, "run", "0:14:00")  # just under 15 min
     assert spec.nodes == 3
-    assert spec.args == {"cores_per_task": 2}
+    assert spec.args == {"cores_per_task": 2, "time_request": "30m"}
     assert spec.workload == "gutsrun_infretis.chain:InfretisRun"
 
     lines = cli.describe(spec, night=False)

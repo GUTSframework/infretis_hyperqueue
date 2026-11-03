@@ -11,8 +11,6 @@ A link runs this module with the project venv's Python:
 
     .venv/bin/python -m gutsrun.chain link <rundir>/.gutsrun/chain.json <n>
 
-and, through srun on a link's other nodes, `... worker <spec> <n> <server dir>`.
-
 Standard library only (as are gutsrun.hq and gutsrun.site, which it
 uses), so that a link's own process imports nothing from site-packages on
 the shared file system.
@@ -35,8 +33,8 @@ Each link:
    job, in a fresh server directory on the shared file system, without a
    journal. The workload's own state is what a restart continues from.
    With `nodes` > 1, starts one HQ worker on each of the job's other nodes
-   too, in one srun step (`worker` below). At the end of the link,
-   stopping the server ends these workers.
+   too, in one srun step (`srun ... hq worker start`). At the end of the
+   link, stopping the server ends these workers.
 6. Runs the workload's command in the run directory, passing SIGTERM and
    SIGINT on. Slurm sends SIGTERM `margin` seconds before the walltime
    (`--signal=B:TERM@margin`), and may send it up to 60 s earlier than asked.
@@ -50,7 +48,8 @@ Each link:
 Everything the chain writes goes to <rundir>/.gutsrun/: chain.json (the
 spec), links.jsonl (what happened: one JSON object per line), the link logs
 link<n>-<job>.out (including the workload's output) and the HQ logs
-link<n>-<job>-hq-server.log and -hq-worker.log.
+link<n>-<job>-hq-server.log, -hq-worker.log and, per other node,
+-hq-worker-<node>.log.
 """
 
 import argparse
@@ -72,7 +71,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from types import FrameType
-from typing import IO, Any, Protocol
+from typing import Any, Protocol
 
 from gutsrun import hq
 from gutsrun.site import Site, SiteError, setup_env
@@ -544,8 +543,7 @@ class Forwarder:
     """Passes SIGTERM and SIGINT on to the workload once it runs; one that
     arrives earlier keeps the workload from starting."""
 
-    def __init__(self, what: str = "the workload") -> None:
-        self.what = what  # for the log
+    def __init__(self) -> None:
         self.child: subprocess.Popen[bytes] | None = None
         self.received: str | None = None
         self.forwarded = False
@@ -554,19 +552,17 @@ class Forwarder:
 
     def handle(self, signum: int, _frame: FrameType | None) -> None:
         self.received = signal.Signals(signum).name
-        log.info(f"{self.received}: stopping {self.what}")
+        log.info(f"{self.received}: stopping the workload")
         if self.child is not None:
             self.forwarded = True
             self.child.send_signal(signum)
 
     def start(self, argv: list[str], cwd: Path | None = None,
-              env: dict[str, str] | None = None,
-              stdout: IO[bytes] | None = None) -> subprocess.Popen[bytes]:
+              env: dict[str, str] | None = None) -> subprocess.Popen[bytes]:
         """Start the workload. A signal that arrives while it starts, after
         `received` was last checked but before `child` is set, is passed
         on here; only once: one request, one signal."""
-        child = self.child = subprocess.Popen(argv, cwd=cwd, env=env, stdout=stdout,
-                                              stderr=subprocess.STDOUT if stdout else None)
+        child = self.child = subprocess.Popen(argv, cwd=cwd, env=env)
         if self.received is not None and not self.forwarded:
             self.forwarded = True
             child.send_signal(signal.Signals[self.received])
@@ -644,10 +640,8 @@ def run_link(spec_path: str | Path, link: int) -> int:
                     hq_dir = stack.enter_context(hq.server_and_worker(
                         spec.root, server, log_prefix, site.cores, env))
                     if spec.nodes > 1:
-                        command = [python, "-m", "gutsrun.chain", "worker", str(spec.path),
-                                   str(link), str(server)]
                         stack.enter_context(hq.workers_elsewhere(
-                            spec.root, server, spec.nodes - 1, site.cores, command, env))
+                            spec.root, server, log_prefix, spec.nodes - 1, site.cores, env))
                     env["HQ_SERVER_DIR"] = str(server)
                     env["PATH"] = os.pathsep.join([hq_dir, env.get("PATH", "")])
                 argv = workload.argv(python, rundir, link)
@@ -694,53 +688,15 @@ def run_link(spec_path: str | Path, link: int) -> int:
         return end(1, f"crashed: {type(e).__name__}: {e}", "")
 
 
-def run_worker(spec_path: str | Path, link: int, server: Path) -> int:
-    """On one of a link's other nodes (in its srun step): wait for the HQ
-    server, then run an HQ worker on all cores until the link stops the
-    server (or SIGTERM)."""
-    host = socket.gethostname()
-    forwarder = Forwarder(f"the hq worker on {host}")
-    spec = Spec.load(spec_path)
-    site = Site(spec.root, spec.site)
-    job = os.environ.get("SLURM_JOB_ID", f"nojob-{os.getpid()}")
-    try:
-        binary = hq.binary(spec.root)
-        if not hq.wait_listed(server, "hq-current", 60):
-            log.info(f"{host}: no hq server in {server}; no worker here")
-            return 1
-        if forwarder.received:
-            return 0
-        with open(spec.dir / f"link{link}-{job}-hq-worker-{host}.log", "wb") as out:
-            child = forwarder.start([binary, "worker", "start", "--server-dir", str(server),
-                                     "--cpus", str(site.cores)], stdout=out)
-        log.info(f"{host}: hq worker started")
-        code = child.wait()
-        # The link ends its workers by stopping the server; HQ exits 1 then.
-        stopped = subprocess.run([binary, "server", "info", "--server-dir", str(server)],
-                                 capture_output=True).returncode != 0
-        log.info(f"{host}: hq worker exit {code}" + (", server stopped" if stopped else ""))
-    except hq.HQError as e:
-        log.info(f"{host}: {e}")
-        return 1
-    return 0 if forwarder.received or stopped else code
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     link = commands.add_parser("link", help="run one link (inside its Slurm job)")
     link.add_argument("spec", type=Path)
     link.add_argument("link", type=int)
-    worker = commands.add_parser("worker", help="run an HQ worker on one of a link's "
-                                                "other nodes (through srun, from `link`)")
-    worker.add_argument("spec", type=Path)
-    worker.add_argument("link", type=int)
-    worker.add_argument("server", type=Path)
     args = parser.parse_args(argv)
     setup_logging()
-    if args.command == "link":
-        return run_link(args.spec, args.link)
-    return run_worker(args.spec, args.link, args.server)
+    return run_link(args.spec, args.link)
 
 
 if __name__ == "__main__":

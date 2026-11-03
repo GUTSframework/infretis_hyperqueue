@@ -83,19 +83,19 @@ flowchart TB
     end
     subgraph generic["gutsrun: generic, no MD"]
         gchain["chain.py<br/>chain of links, workloads"]
-        ghq["hq.py<br/>HQ server and workers in a job"]
+        ghq["hq.py<br/>HQ server and workers in a job,<br/>HQBackend: tasks through the hq CLI"]
         gsite["site.py<br/>sites/*.toml, setup"]
         executor["executor.py<br/>TaskExecutor"]
         spool["spool.py<br/>layout, atomic files"]
         task["task.py<br/>one task process"]
-        backends["backends/<br/>local.py, hq.py"]
+        backends["backends/<br/>Backend, Resources, local.py"]
     end
     subgraph infretis["infretis, GUTS fork"]
         sched["scheduler, asyncrunner<br/>executor_factory hook, graceful stop"]
         repex["REPEX_state<br/>pick, treat_output, restart.toml"]
         engines["core.tis.run_md, engines"]
     end
-    hq["HyperQueue<br/>hq binary, Python client"]
+    hq["HyperQueue<br/>hq binary"]
     sl["Slurm<br/>sbatch, srun, scancel"]
 
     ichain --> gchain
@@ -111,8 +111,9 @@ flowchart TB
     sched -- "submit(partial(run_md, md_items))" --> executor
     executor --> spool
     executor --> backends
+    executor -- "HQBackend" --> ghq
     backends -- "local: subprocess" --> task
-    backends -- "hq: program task" --> hq
+    ghq -- "hq submit, hq journal stream" --> hq
     hq --> task
     task --> spool
     task -. "unpickles and runs" .-> worker
@@ -135,16 +136,14 @@ sequenceDiagram
     R->>R: REPEX_state.pick: ensemble, path, random stream
     R->>X: submit(partial(run_md, md_items))
     X->>S: in/{tid}.pkl: sys.path and the call (temp file, rename)
-    X->>H: one job, one program task:<br/>python -m gutsrun.task {dir} {tid}
+    X->>H: hq submit --job {link's job} --array {tid}:<br/>python -m gutsrun.task {dir} {tid}
     H->>T: starts it on a worker, with its cores
     T->>S: read in/{tid}.pkl
     T->>T: worker_initializer: build the engines<br/>run_md: logs to worker{pin}.log, runs lmp or gmx
-    T->>S: out/{tid}.{instance}.pkl (temp file, rename)
-    loop every 20 ms
-        X->>S: list out/
-    end
-    Note over X,H: every 2 s: ask HQ which tasks failed
-    X->>R: the future's result (the first result wins)
+    T->>S: out/{tid}.pkl (temp file, rename)
+    H->>X: task-finished, in hq journal stream
+    X->>S: read out/{tid}.pkl
+    X->>R: the future's result
     R->>R: treat_output: path files, infretis_data.txt,<br/>restart.toml last
     R->>X: submit the next move
     Note over R,T: SIGTERM waits until treat_output is done, then infretis<br/>cancels the moves in flight and the launcher exits 3. The next<br/>link redoes them from restart.toml's locked list.
@@ -155,7 +154,7 @@ sequenceDiagram
 ```
 flake.nix               dev shell: hq 0.26.2, Python 3.12, GROMACS, LAMMPS
 pyproject.toml          the gutsrun package (src/), the gutsrun-infretis command, pytest
-requirements.txt        direct pins (infretis, inftools, hyperqueue client)
+requirements.txt        direct pins (infretis, inftools)
 requirements-lock.txt   exact versions, installed by setup-venv.sh
 scripts/get-hq.sh       pinned hq binary into ./bin, for clusters without Nix
 scripts/setup-venv.sh   .venv from the lock file, plus this checkout (editable)
@@ -184,7 +183,7 @@ runs as one backend task, a fresh `python -m gutsrun.task` process.
 
 ```python
 from gutsrun import TaskExecutor
-from gutsrun.backends.hq import HQBackend        # or backends.local.LocalBackend
+from gutsrun.hq import HQBackend        # or gutsrun.backends.local.LocalBackend
 
 ex = TaskExecutor(HQBackend(server_dir), "runs/x/spool",
                   initializer=init, initargs=(cfg,),        # runs before every call
@@ -193,8 +192,10 @@ fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})
 ```
 
 - **Spool directory**, one subdirectory per executor instance: `in/`
-  holds the pickled calls, `out/` the results (`<tid>.<instance>.pkl`,
-  temp + rename), `log/` stdout/stderr. A new executor deletes the older
+  holds the pickled calls, `out/` the results (`<tid>.pkl`, temp +
+  rename), `log/` stdout/stderr (`<tid>.<instance>.{out,err}`; HQ deletes
+  them when the task finishes, `:rm-if-finished`, and keeps those of
+  failed and cancelled tasks). A new executor deletes the older
   subdirectories, so a queued task of an older executor (after a killed
   launcher on a long-lived HQ server) fails without running. One that
   already runs keeps running its move in `worker{pin}/` and fails only
@@ -203,18 +204,35 @@ fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})
   files open in can stay behind (on NFS, as `.nfs*` files) until a later
   executor removes it. In a chain none of this happens: each link has a
   fresh HQ server, and Slurm ends a link's tasks with its job.
-- **Completion** from result files (listed every 20 ms). Failures from the
-  backend every 2 s (HQ: one batched `get_failed_tasks` call). The first
-  result for a task wins; later ones are deleted. Files of finished
-  tasks are deleted; failed tasks keep their logs.
-- **HQ tasks are `program()` tasks**, not Python function tasks. They
-  carry only two paths (payload rule), and need no HQ Python environment.
-  HQ reruns a task after a worker crash (`crash_limit`, default 2). The
-  rerun gets a new instance number.
+- **HQ through its CLI only.** `HQBackend` opens one HQ job (`hq job
+  open`) and submits each call as the task of that job whose id is the
+  executor's task id (`hq submit --job J --array <tid>`): a program task
+  carrying two paths (payload rule), which needs no HQ Python package. One
+  `hq journal stream` reports when tasks end; it replays every event since
+  the server started, so a restarted stream misses nothing. The event
+  format is HQ's own: check it when upgrading HQ. HQ 0.26.2 cancels whole
+  jobs only, so shutting down cancels the job (`hq job cancel J
+  --reason ...`), with SIGINT to each task's process group. HQ reruns a
+  task after a worker crash (`crash_limit`, default 2); the rerun gets a
+  new instance number.
+- **Completion** from the backend (under HQ, `task-finished` events): the
+  executor then reads `out/<tid>.pkl`, retrying for up to 60 s in case the
+  shared file system shows it late. Inputs and results of ended tasks are
+  deleted.
+- **Errors:** a call that raises (or whose value does not pickle) makes
+  the task write its traceback to stderr, and its last ~1,900 characters
+  to `$HQ_ERROR_FILENAME` (with `--task-dir`), and exit 1. HQ reports that
+  text in the `task-failed` event, and the future fails with
+  `TaskFailed("task <tid>: <traceback>")`, naming the stderr log. The
+  caller gets a message, not the call's own exception: nothing in infretis
+  or gutsrun depends on the type.
+- **`--time-request`** (`HQBackend(time_request=...)`, off by default): a
+  worker with less time left than that does not start the task. A worker
+  inside a Slurm job is expected to take its end time from Slurm (not
+  yet checked on DAS-6).
 - **Like `ProcessPoolExecutor` with spawn:** calls and results must pickle
-  by reference; the caller's `sys.path` is sent along. Exceptions arrive
-  with the remote traceback as `__cause__`. Unlike it, the initializer
-  runs before every call.
+  by reference; the caller's `sys.path` is sent along. Unlike it, the
+  initializer runs before every call, and failures arrive as `TaskFailed`.
 - Both backends set `OMP_NUM_THREADS` to the task's cores (HQ does so for
   every task).
 
@@ -225,7 +243,7 @@ In an infretis run directory, instead of `infretisrun -i infretis.toml`:
 ```bash
 .venv/bin/python -m gutsrun_infretis.launcher -i infretis.toml --backend local
 HQ_SERVER_DIR=... .venv/bin/python -m gutsrun_infretis.launcher \
-    -i restart.toml --backend hq --cores-per-task 2
+    -i restart.toml --backend hq --cores-per-task 2 [--time-request 30m]
 ```
 
 or `bench/bare_run.py ... --runner gutsrun [--backend hq]`. The launcher
@@ -261,8 +279,10 @@ one that runs `bench/bare_run.py` with either runner. A link's own process
 runs `.venv/bin/python -m gutsrun.chain link ...` and imports only the
 standard library, so it reads nothing from site-packages on the shared
 file system; the workload's command then runs from the project venv.
-With `nodes` > 1, one srun step runs `python -m gutsrun.chain worker` on
-each of the other nodes, which starts an HQ worker there (`run_worker`).
+The link writes the HQ server's access file (host, ports the OS picked as
+free, keys) before starting the server, so with `nodes` > 1 one srun step
+runs `hq worker start` directly on each of the other nodes: a worker that
+starts first retries every 2 s until the server listens.
 
 Bench chains on DAS-6, from the repo root on `fs0`:
 
@@ -312,7 +332,7 @@ GROMACS, LAMMPS, ruff, pyright, jq):
 ```bash
 nix develop
 scripts/setup-venv.sh
-.venv/bin/python -c 'import infretis, hyperqueue'
+.venv/bin/python -c 'import infretis'
 ```
 
 Without Nix, you need Python 3.12 and git (infretis and inftools install
@@ -322,7 +342,7 @@ from git):
 PYTHON=python3.12 scripts/setup-venv.sh
 scripts/get-hq.sh                  # the same pinned hq, into bin/
 export PATH="$PWD/bin:$PATH"       # tests look for hq on PATH; chain links find bin/hq themselves
-.venv/bin/python -c 'import infretis, hyperqueue'
+.venv/bin/python -c 'import infretis'
 ```
 
 The rest of what the dev shell provides, and what needs it:

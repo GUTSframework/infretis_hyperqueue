@@ -2,6 +2,7 @@
 
     python -m gutsrun_infretis.launcher -i infretis.toml --backend local
     python -m gutsrun_infretis.launcher -i restart.toml --backend hq --cores-per-task 2
+    python -m gutsrun_infretis.launcher -i restart.toml --backend hq --time-request 30m
 
 Run it in the infretis run directory, like `infretisrun`. It needs the
 infretis pinned in requirements.txt (the GUTS fork, branch `guts`): its
@@ -17,6 +18,9 @@ adds, for this run only:
   (HQ places tasks, so fixed offsets would put moves on the same cores),
   and so is one whose `-ntomp` differs from --cores-per-task (HQ sets
   OMP_NUM_THREADS to it; GROMACS aborts on a mismatch).
+- Under HQ, `--time-request` (e.g. 30m) keeps a worker from starting a
+  move unless it has that much time left. Off by default; set it to about
+  the longest move plus the chain's SIGTERM margin.
 - A stop signal that comes before infretis's scheduler takes over the
   signals also stops the run. Once the scheduler has returned, and after
   the first stop, stop signals are ignored (`scancel` signals every
@@ -217,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--spool", default="gutsrun-spool")
     p.add_argument("--cores-per-task", type=int, default=1)
     p.add_argument("--crash-limit", type=int, default=2)
+    p.add_argument("--time-request", help="HQ: start a move only on a worker with this "
+                                          "much time left, e.g. 30m (default: off)")
     args = p.parse_args(argv)
 
     # Our own file; infretis logs to the root logger (sim.log, worker logs).
@@ -235,9 +241,10 @@ def main(argv: list[str] | None = None) -> int:
         return LocalBackend(max_workers=max_workers)
 
     def hq_backend(max_workers: int | None) -> Backend:
-        from gutsrun.backends.hq import HQBackend
+        from gutsrun.hq import HQBackend
 
-        return HQBackend(args.hq_server_dir, crash_limit=args.crash_limit)
+        return HQBackend(args.hq_server_dir, crash_limit=args.crash_limit,
+                         time_request=args.time_request)
 
     make_backend = local_backend if args.backend == "local" else hq_backend
 

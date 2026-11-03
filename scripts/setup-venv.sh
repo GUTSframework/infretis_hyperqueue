@@ -23,4 +23,4 @@ reqs="${REQS:-requirements-lock.txt}"
 "$root/.venv/bin/python" -m pip install --upgrade pip
 "$root/.venv/bin/python" -m pip install -r "$root/$reqs"
 "$root/.venv/bin/python" -m pip install --no-deps -e "$root"
-"$root/.venv/bin/python" -c 'import infretis, hyperqueue, gutsrun_infretis; print("ok:", infretis.__file__)'
+"$root/.venv/bin/python" -c 'import infretis, gutsrun_infretis; print("ok:", infretis.__file__)'

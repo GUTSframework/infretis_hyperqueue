@@ -6,7 +6,6 @@ cycler==0.12.1
 filelock==4.2.0
 fonttools==4.67.0
 GridDataFormats==1.2.0
-hyperqueue==0.26.2
 infretis @ git+https://github.com/GUTSframework/infretis@bf813ee355bd91f4c78f8303a8f627f0e0808d2e
 inftools @ git+https://github.com/infretis/inftools@ca33eae4258213f0cf526881918a643b8c5cc2ff
 iniconfig==2.3.1

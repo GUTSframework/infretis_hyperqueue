@@ -43,5 +43,5 @@ testpaths = ["tests"]
 addopts = "-m 'not slow'"
 markers = [
     "slow: minutes-long real-MD checks; run with `pytest -m slow`",
-    "hq: needs the hq binary and the HyperQueue client (run inside `nix develop`)",
+    "hq: needs the hq binary (run inside `nix develop`)",
 ]

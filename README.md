@@ -94,12 +94,18 @@ time = "00:14:00"      # walltime per link (default: just under the site's dayti
 margin = 90            # seconds before the walltime that SIGTERM comes (default 90)
 cores_per_task = 1     # cores per infretis move, i.e. per MD engine call (default 1)
 nodes = 1              # nodes per link, each with an HQ worker on all its cores (default 1)
+time_request = "30m"   # start a move only if its link has this much time left (default: off)
 name = "water-run-3"   # label in the Slurm job names (default: the directory's name)
 ```
 
 The simulation itself (steps, workers, engines) stays in `infretis.toml`.
 More nodes only help if infretis has more `workers` than one node's cores
 hold (`workers` × `cores_per_task` > the site's `cores_per_node`).
+`time_request` keeps HQ from starting a move that its link would cut off
+at the walltime; the move waits for the next link instead. Set it to about
+your longest move plus `margin`. `hq task explain <job> <task>` (with
+`HQ_SERVER_DIR` set to the link's `.gutsrun/hq-<job>`) says why a move
+waits.
 To label a run beyond `name`, use version control: a commit message or a
 README in the run directory.
 
@@ -113,7 +119,10 @@ infretis's own outputs, as without gutsrun, plus:
   with the result and the step reached). `status` reads it.
 - `.gutsrun/chain.json`: the chain's settings.
 - `.gutsrun/link<n>-<job>-hq-server.log`, `-hq-worker.log` and, with
-  `nodes` > 1, `-hq-worker-<host>.log` for each other node: HQ's own logs.
+  `nodes` > 1, `-hq-worker-<node>.log` for each other node: HQ's own logs.
+- `gutsrun-spool/<executor>/log/`: stdout and stderr of moves that failed
+  or were cancelled at a stop (those of finished moves are deleted). The
+  next link's launcher deletes them.
 - `gutsrun.log`: the launcher's log.
 - `restart.toml.bak.<step>`: a copy of `restart.toml` at each link's start.
 

@@ -10,11 +10,14 @@ Differences:
   spawn start method; functions defined in `__main__` do not.
 - `submit(..., resource_dict={...})` sets one call's resources
   (cores, gpus, cwd, env), as in executorlib.
+- A call that raises fails its future with TaskFailed, whose message ends
+  with the task's traceback (about 2 KiB of it; all of it is in the task's
+  stderr log, which is kept), not with the call's own exception.
 
-Completion: a watcher thread lists `out/` every `poll_interval` and asks
-the backend about failures every `failure_poll_interval`. The first
-result for a task wins; later ones (an HQ rerun, a duplicate) are deleted.
-Inputs, results and logs of finished tasks are deleted (inode budget).
+Completion: a watcher thread asks the backend every `poll_interval` which
+tasks ended (under HQ, from its event stream), and reads the result file
+of each one that finished. Inputs and results of ended tasks are deleted
+(inode budget); the backend deletes the logs of tasks that finished.
 """
 
 import logging
@@ -40,14 +43,7 @@ T = TypeVar("T")
 
 
 class TaskFailed(Exception):
-    """The task process broke without delivering a result."""
-
-
-class RemoteTraceback(Exception):
-    """Carries the task-side traceback, as `__cause__` (like ProcessPoolExecutor)."""
-
-    def __str__(self) -> str:
-        return self.args[0]
+    """The call raised, or the task process broke, or it was cancelled."""
 
 
 class TaskExecutor(Executor):
@@ -62,9 +58,9 @@ class TaskExecutor(Executor):
     - `resource_dict`: default resources per call (cores, gpus, cwd, env);
       `submit(..., resource_dict=...)` overrides them for one call.
     - `python`: the interpreter tasks run with.
-    - `poll_interval`, `failure_poll_interval`: seconds between looks for
-      results, and between asking the backend about failed tasks.
-    - `keep_failed_logs`: keep a failed task's stdout and stderr.
+    - `poll_interval`: seconds between asking the backend which tasks ended.
+    - `result_timeout`: seconds to wait for the result file of a task that
+      finished, in case the shared file system shows it late.
     """
 
     def __init__(self, backend: Backend, spool_dir: str | Path, *,
@@ -72,15 +68,14 @@ class TaskExecutor(Executor):
                  initializer: Callable[..., object] | None = None,
                  initargs: Iterable[Any] = (), resource_dict: dict[str, Any] | None = None,
                  python: str = sys.executable, poll_interval: float = 0.02,
-                 failure_poll_interval: float = 2.0, keep_failed_logs: bool = True) -> None:
+                 result_timeout: float = 60.0) -> None:
         self.backend = backend
         self.max_workers = max_workers  # informational; the backend limits concurrency
         self.initializer, self.initargs = initializer, tuple(initargs)
         self.default_resources = Resources.from_dict(resource_dict, Resources())
         self.python = python
         self.poll_interval = poll_interval
-        self.failure_poll_interval = failure_poll_interval
-        self.keep_failed_logs = keep_failed_logs
+        self.result_timeout = result_timeout
 
         self.spool = Path(spool_dir).resolve()
         self.dir = self.spool / spool.new_name()
@@ -90,6 +85,7 @@ class TaskExecutor(Executor):
 
         self._lock = threading.Lock()  # guards _pending, _seq and backend calls
         self._pending: dict[str, Future[Any]] = {}
+        self._finished: dict[str, float] = {}  # tid -> when; its result is not readable yet
         self._seq = 0
         self._shutdown = False
         self._stop = threading.Event()
@@ -131,10 +127,9 @@ class TaskExecutor(Executor):
         with self._lock:
             self._shutdown = True
             if cancel_futures:
-                for tid, fut in list(self._pending.items()):
-                    self.backend.cancel(tid)
-                    del self._pending[tid]
+                for fut in self._pending.values():
                     fut.set_exception(TaskFailed("cancelled at shutdown"))
+                self._pending.clear()
         if wait:
             while True:
                 with self._lock:
@@ -163,80 +158,49 @@ class TaskExecutor(Executor):
                 shutil.rmtree(d, ignore_errors=True)
 
     def _watch(self) -> None:
-        last_failure_poll = time.monotonic()
         while not self._stop.is_set():
             try:
-                self._collect_results()
-                if time.monotonic() - last_failure_poll >= self.failure_poll_interval:
-                    last_failure_poll = time.monotonic()
-                    self._collect_failures()
+                self._collect()
             except Exception:
                 log.exception("gutsrun watcher")
             self._stop.wait(self.poll_interval)
 
-    def _collect_results(self) -> None:
-        out = self.dir / "out"
-        for name in os.listdir(out):
-            parsed = spool.parse_result_name(name)
-            if parsed is None:
-                continue
-            tid, _instance = parsed
-            path = out / name
-            with self._lock:
-                fut = self._pending.pop(tid, None)
-            if fut is None:  # duplicate, late or unknown: the first result won
-                path.unlink(missing_ok=True)
-                continue
-            try:
-                with open(path, "rb") as f:
-                    result = pickle.load(f)
-            except Exception as e:
-                result = ("err", TaskFailed(f"task {tid}: unreadable result: {e!r}"), "")
-            if result[0] == "ok":
-                fut.set_result(result[1])
-            else:
-                exc = result[1]
-                if result[2]:
-                    exc.__cause__ = RemoteTraceback(f'\n"""\n{result[2]}"""')
-                fut.set_exception(exc)
-            # Free the backend slot only after delivering: the local backend
-            # waits here for the task process to exit (~0.1 s with infretis loaded).
-            with self._lock:
-                self.backend.release(tid)
-            self._cleanup(tid, keep_logs=False)
-
-    def _collect_failures(self) -> None:
+    def _collect(self) -> None:
         with self._lock:
             ended = self.backend.poll()
-        if not ended:
-            return
-        self._collect_results()  # a result may have landed just before the exit
+        now = time.monotonic()
         for tid, error in ended:
-            with self._lock:
-                fut = self._pending.pop(tid, None)
-                if fut is not None:
-                    self.backend.release(tid)
-            if fut is None:
-                continue
-            msg = error or "exited without writing a result"
-            fut.set_exception(TaskFailed(f"task {tid}: {msg}{self._stderr_tail(tid)}"))
-            self._cleanup(tid, keep_logs=self.keep_failed_logs)
+            if error is None:
+                self._finished[tid] = now
+            else:
+                stderr = self.dir / "log" / f"{tid}.*.err"
+                self._deliver(tid, TaskFailed(f"task {tid}: {error}\n(stderr: {stderr})"), None)
+        for tid, since in list(self._finished.items()):
+            failed, value = None, None
+            try:
+                with open(self.dir / "out" / f"{tid}.pkl", "rb") as f:
+                    value = pickle.load(f)
+            except FileNotFoundError:
+                if now - since < self.result_timeout:
+                    continue  # not visible here yet; try again
+                failed = TaskFailed(f"task {tid}: finished without writing a result")
+            except Exception as e:
+                failed = TaskFailed(f"task {tid}: unreadable result: {e!r}")
+            del self._finished[tid]
+            self._deliver(tid, failed, value)
 
-    def _stderr_tail(self, tid: str, n: int = 20) -> str:
-        tails = []
-        for p in sorted((self.dir / "log").glob(f"{tid}.*.err")):
-            lines = p.read_text(errors="replace").splitlines()[-n:]
-            if lines:
-                tails.append(f"\n--- {p.name} ---\n" + "\n".join(lines))
-        return "".join(tails)
-
-    def _cleanup(self, tid: str, keep_logs: bool) -> None:
+    def _deliver(self, tid: str, failed: TaskFailed | None, value: Any) -> None:
+        """Delete the task's files and settle its future, with `failed` if
+        set, else with `value`."""
         (self.dir / "in" / f"{tid}.pkl").unlink(missing_ok=True)
-        for p in (self.dir / "out").glob(f"{tid}.*.pkl"):
-            p.unlink(missing_ok=True)
-        if not keep_logs:
-            for p in (self.dir / "log").glob(f"{tid}.*"):
-                p.unlink(missing_ok=True)
+        (self.dir / "out" / f"{tid}.pkl").unlink(missing_ok=True)
+        with self._lock:
+            fut = self._pending.pop(tid, None)
+        if fut is not None:
+            if failed is not None:
+                fut.set_exception(failed)
+            else:
+                fut.set_result(value)
 
 
 def _pythonpath(existing: str | None) -> str:

@@ -7,9 +7,8 @@ import time
 
 import helpers
 import pytest
-from conftest import wait_for
 
-from gutsrun import RemoteTraceback, TaskExecutor, TaskFailed, spool
+from gutsrun import TaskExecutor, TaskFailed, spool
 from gutsrun.backends import Resources
 
 
@@ -32,12 +31,21 @@ def test_run_in_executor(make_executor):
 
 
 def test_exception_reaches_future(make_executor):
+    """As the task's traceback in a TaskFailed; the task's logs are kept."""
     ex = make_executor()
     fut = ex.submit(helpers.boom, "bad move")
-    with pytest.raises(ValueError, match="bad move") as info:
+    with pytest.raises(TaskFailed, match="ValueError: bad move") as info:
         fut.result(timeout=60)
-    assert isinstance(info.value.__cause__, RemoteTraceback)
-    assert "in boom" in str(info.value.__cause__)
+    assert "in boom" in str(info.value)
+    assert "ValueError: bad move" in (ex.dir / "log" / "00000000.0.err").read_text()
+
+
+def test_long_traceback_keeps_its_end(make_executor):
+    ex = make_executor()
+    with pytest.raises(TaskFailed, match="ValueError: the end") as info:
+        ex.submit(helpers.long_traceback, "the end").result(timeout=60)
+    assert "RuntimeError" not in str(info.value)  # the start was cut
+    assert len(str(info.value)) < 2000 + len(str(ex.dir))
 
 
 def test_initializer_runs_before_each_call(make_executor):
@@ -82,23 +90,51 @@ def test_broken_task_fails_future(make_executor):
     assert ex.submit(helpers.square, 3).result(timeout=60) == 9
 
 
-def test_first_result_wins_duplicates_ignored(make_executor, tmp_path):
-    ex = make_executor()
-    started = tmp_path / "started"
-    fut = ex.submit(helpers.slow, str(started), 1.0, "real")
-    tid = "00000000"
-    wait_for(lambda: list(tmp_path.glob("started.*")), what="task started")
-    # A competing result (as from an HQ rerun) arrives first.
-    spool.write_atomic(ex.dir / "out" / spool.result_name(tid, "9"),
-                       spool.dump(("ok", "first")))
-    assert fut.result(timeout=60) == "first"
-    # So does a result for a task nobody submitted.
-    spool.write_atomic(ex.dir / "out" / spool.result_name("99999999", "0"),
-                       spool.dump(("ok", 1)))
-    # The real task finishes after ~1 s; its late result must be dropped too.
-    time.sleep(2.5)
-    assert os.listdir(ex.dir / "out") == []
-    assert ex.submit(helpers.square, 4).result(timeout=60) == 16
+class Ends:
+    """A backend whose tasks never run: the test says when they end."""
+
+    def __init__(self) -> None:
+        self.ended: list[tuple[str, str | None]] = []
+
+    def submit(self, tid, argv, res, stdout, stderr) -> None:
+        pass
+
+    def poll(self) -> list[tuple[str, str | None]]:
+        ended, self.ended = self.ended, []
+        return ended
+
+    def close(self) -> None:
+        pass
+
+
+def test_a_result_that_shows_late_is_still_read(tmp_path):
+    """On a shared file system the result file may show up after the
+    backend reports the task finished."""
+    backend = Ends()
+    ex = TaskExecutor(backend, tmp_path / "spool", poll_interval=0.01)
+    try:
+        fut = ex.submit(helpers.square, 3)
+        backend.ended.append(("00000000", None))
+        time.sleep(0.2)
+        assert not fut.done()
+        spool.write_atomic(ex.dir / "out" / "00000000.pkl", spool.dump(9))
+        assert fut.result(timeout=5) == 9
+        assert os.listdir(ex.dir / "out") == os.listdir(ex.dir / "in") == []
+        backend.ended.append(("00000000", None))  # a repeated event changes nothing
+    finally:
+        ex.shutdown()
+
+
+def test_finished_without_a_result_fails(tmp_path):
+    backend = Ends()
+    ex = TaskExecutor(backend, tmp_path / "spool", poll_interval=0.01, result_timeout=0.1)
+    try:
+        fut = ex.submit(helpers.square, 3)
+        backend.ended.append(("00000000", None))
+        with pytest.raises(TaskFailed, match="without writing a result"):
+            fut.result(timeout=5)
+    finally:
+        ex.shutdown()
 
 
 def test_finished_tasks_leave_no_files(make_executor):
@@ -120,7 +156,7 @@ def test_submit_after_shutdown_raises(make_executor):
 def test_unpicklable_result(make_executor):
     ex = make_executor()
     fut = ex.submit(functools.partial(eval, "lambda: 1"))
-    with pytest.raises(RuntimeError, match="not picklable"):
+    with pytest.raises(TaskFailed, match="pickle"):
         fut.result(timeout=60)
 
 

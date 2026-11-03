@@ -4,11 +4,13 @@ Layout (one directory per executor instance; a new executor deletes the
 others, so tasks of an older one find neither their input nor out/):
 
     <spool>/<name>/in/<tid>.pkl    task input (sys.path, then the call)
-    <spool>/<name>/out/<tid>.<instance>.pkl   task result
-    <spool>/<name>/log/<tid>.<instance>.{out,err}
+    <spool>/<name>/out/<tid>.pkl   task result (only of a call that returned)
+    <spool>/<name>/log/<tid>.<instance>.{out,err}   kept only for failed tasks
+
+The instance goes up when HQ reruns a task after its worker crashed.
 
 Every file is written to a dot-prefixed temporary name and renamed into
-place, so a reader never sees half a file. Readers skip dot files.
+place, so a reader never sees half a file.
 """
 
 import os
@@ -38,17 +40,3 @@ def dump(*objects: object) -> bytes:
     """The objects pickled one after the other, to read with pickle.load in turn."""
     return b"".join(pickle.dumps(o, protocol=pickle.HIGHEST_PROTOCOL) for o in objects)
 
-
-def result_name(tid: str, instance: str) -> str:
-    """`<tid>.<instance>.pkl`, a result's file name in out/."""
-    return f"{tid}.{instance}.pkl"
-
-
-def parse_result_name(name: str) -> tuple[str, str] | None:
-    """`<tid>.<instance>.pkl` -> (tid, instance); None for anything else."""
-    if name.startswith(".") or not name.endswith(".pkl"):
-        return None
-    parts = name[: -len(".pkl")].split(".")
-    if len(parts) != 2:
-        return None
-    return parts[0], parts[1]
