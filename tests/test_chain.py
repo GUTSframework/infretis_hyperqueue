@@ -577,8 +577,9 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
     with pytest.raises(ChainError, match="unknown key 'walltime'"):
         cli.make_spec(rundir, {}, root=project.root)
     (rundir / "gutsrun.toml").write_text(
-        'site = "test"\nlinks = 7\ncores_per_task = 2\nnodes = 3\n'
-            'time_request = "30m"\n')
+        'site = "test"\nlinks = 7\ncores_per_task = 2\nnodes = 3\ntime_request = "30m"\n')
+    with pytest.raises(ChainError, match="cores_per_task is 3, but a node of test has 2 cores"):
+        cli.make_spec(rundir, {"cores_per_task": 3}, root=project.root)
     spec = cli.make_spec(rundir, {"links": 5, "name": None}, root=project.root)
     assert (spec.links, spec.name, spec.time) == (5, "run", "0:14:00")  # just under 15 min
     assert spec.nodes == 3

@@ -132,10 +132,16 @@ def make_spec(rundir: Path, options: dict[str, Any], root: str | Path = ROOT) ->
                       "time_request": config.get("time_request")},
                 margin=config.get("margin", 90), links=config.get("links", 10),
                 nodes=config.get("nodes", 1), root=str(root))
+    site = Site(spec.root, spec.site)
+    if spec.args["cores_per_task"] > site.cores:
+        # HQ would hold every move: no worker has that many cores.
+        raise ChainError(f"cores_per_task is {spec.args['cores_per_task']}, but a node of "
+                         f"{spec.site} has {site.cores} cores (cores_per_node); no move "
+                         "would ever start")
     if "time" in config:
         spec.time = config["time"]
     else:
-        limit = Site(spec.root, spec.site).max_walltime_day
+        limit = site.max_walltime_day
         if limit is None:
             raise ChainError("no time: set `time` in gutsrun.toml or pass --time")
         spec.time = walltime(seconds(limit) - 60)
