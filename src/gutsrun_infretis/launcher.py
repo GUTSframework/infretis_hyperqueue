@@ -10,16 +10,16 @@ chain's link; without one, the launcher runs its own HQ server and a
 worker on all the cores it may use, for this run (server directory
 `gutsrun-hq/`, logs `gutsrun-hq-server.log` and `gutsrun-hq-worker.log`).
 
-It needs the
-infretis pinned in requirements.txt (the GUTS fork, branch `guts`): its
-`scheduler` takes an `executor_factory`, through which the launcher passes
-a factory that returns a gutsrun TaskExecutor; its worker initializer
-needs no shared state, its moves log to `worker{pin}.log`, its workers
-leave the shared GROMACS inputs alone and stop their MD program on
-SIGTERM, and it stops gracefully on SIGTERM and SIGINT. What the launcher
-adds, for this run only:
+It needs the infretis pinned in requirements.txt (the GUTS fork, branch
+`guts`), and refuses another commit: its `scheduler` takes an
+`executor_factory`, through which the launcher passes a factory that
+returns a gutsrun TaskExecutor; its worker initializer needs no shared
+state, its moves log to `worker{pin}.log`, its workers leave the shared
+GROMACS inputs alone and stop their MD program on SIGTERM, it writes
+restart.toml atomically, it stops gracefully on SIGTERM and SIGINT, and it
+says why when it refuses to start. What the launcher adds, for this run
+only:
 
-- `restart.toml` is backed up and parse-checked at start.
 - A `wmdrun` with `-pin on|auto`/`-pinoffset`/`-pinstride` is refused
   (HQ places tasks, so fixed offsets would put moves on the same cores),
   and so is one whose `-ntomp` differs from --cores-per-task (HQ sets
@@ -33,18 +33,16 @@ adds, for this run only:
   process of the job, and the link passes on a second copy).
 
 Exit codes: 0 = all steps done, 3 = stopped by a signal (restart from
-restart.toml), 4 = infretis refused to start (its reason on stderr and in
-gutsrun.log), other = error.
+restart.toml), 4 = infretis refused to start, also when the run is already
+done (infretis's reason on stderr), other = error.
 """
 
 import argparse
 import contextlib
-import inspect
 import json
 import logging
 import os
 import re
-import shutil
 import signal
 import sys
 from collections.abc import Callable
@@ -53,10 +51,6 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
-import infretis.asyncrunner
-import infretis.scheduler
-import tomli
-from infretis.classes.engines.factory import create_engines
 from infretis.scheduler import scheduler
 from infretis.setup import setup_config
 
@@ -110,29 +104,18 @@ def infretis_commit() -> str | None:
     return info.get("vcs_info", {}).get("commit_id")
 
 
-def missing_features() -> list[str]:
-    """What the launcher relies on and the installed infretis lacks."""
-    checks = {
-        "the executor_factory hook":
-            "executor_factory" in inspect.signature(scheduler).parameters,
-        "the graceful stop": hasattr(infretis.scheduler, "StopRequest"),
-        "GROMACS inputs written once at setup":
-            "write_inputs" in inspect.signature(create_engines).parameters,
-        "workers that stop their MD program on SIGTERM":
-            hasattr(infretis.asyncrunner, "WorkerTerminated"),
-    }
-    return [name for name, present in checks.items() if not present]
-
-
 def check_infretis() -> None:
-    """Exit if infretis lacks what the launcher relies on (missing_features)."""
+    """Exit if pip installed infretis from another commit than the pinned
+    one. An infretis installed from a local directory records no commit:
+    that only gets a warning."""
     commit = infretis_commit()
-    log.info("infretis commit %s (tested: %s)", commit, TESTED_COMMIT)
-    if missing := missing_features():
-        sys.exit(f"infretis {commit or '(unknown version)'} lacks {', '.join(missing)}. "
-                 f"Install the infretis pinned in requirements.txt ({TESTED_COMMIT}); "
-                 "in an existing .venv, pip keeps the old one because the version "
-                 "number is the same: add --force-reinstall.")
+    if commit is None:
+        log.warning("cannot tell which infretis commit is installed (tested: %s)",
+                    TESTED_COMMIT)
+    elif not commit.startswith(TESTED_COMMIT):
+        sys.exit(f"infretis {commit[:7]} is installed, not the pinned {TESTED_COMMIT} "
+                 "(requirements.txt). In an existing .venv, pip keeps the old one "
+                 "because the version number is the same: add --force-reinstall.")
 
 
 def stop_once(signum: int, frame: FrameType | None) -> None:
@@ -169,55 +152,6 @@ def check_wmdrun(wmdrun: list, cores: int) -> None:
                      "when they differ")
 
 
-def check_restart_file(inp: str) -> None:
-    """Back up restart.toml and make sure it parses: a truncated file would
-    otherwise only show when infretis fails to restart."""
-    path = Path("restart.toml")
-    if not path.exists():
-        return
-    try:
-        cstep = tomli.loads(path.read_text())["current"]["cstep"]
-    except Exception as e:
-        sys.exit(f"restart.toml does not parse ({e}); restore it from "
-                 "restart.toml.bak.* before restarting")
-    shutil.copy2(path, f"restart.toml.bak.{cstep}")
-    if inp != "restart.toml":
-        log.warning("restart.toml exists but input is %s; infretis will refuse", inp)
-
-
-class Collect(logging.Handler):
-    """Keeps the messages of the records it gets."""
-
-    def __init__(self) -> None:
-        super().__init__(logging.WARNING)
-        self.messages: list[str] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(record.getMessage())
-
-
-def setup(inp: str) -> tuple[dict[str, Any] | None, str]:
-    """infretis's `setup_config(inp)`, and the reason it logged if it
-    returned None (it does not run, and says why on its "main" logger)."""
-    reasons = Collect()
-    main = logging.getLogger("main")
-    main.addHandler(reasons)
-    try:
-        config = setup_config(inp)
-    finally:
-        main.removeHandler(reasons)
-    return config, "; ".join(reasons.messages) or "no reason given"
-
-
-def done(inp: str) -> bool:
-    """Whether the run in `inp` has done all its steps."""
-    try:
-        config = tomli.loads(Path(inp).read_text())
-        return config["current"]["cstep"] >= config["simulation"]["steps"]
-    except (OSError, KeyError, tomli.TOMLDecodeError):
-        return False
-
-
 # --- main -------------------------------------------------------------------------
 
 
@@ -229,7 +163,6 @@ def main(argv: list[str] | None = None) -> int:
                         "a server of the launcher's own)")
     p.add_argument("--spool", default="gutsrun-spool")
     p.add_argument("--cores-per-task", type=int, default=1)
-    p.add_argument("--crash-limit", type=int, default=2)
     p.add_argument("--time-request", help="start a move only on a worker with this "
                                           "much time left, e.g. 30m (default: off)")
     args = p.parse_args(argv)
@@ -242,13 +175,11 @@ def main(argv: list[str] | None = None) -> int:
         logging.getLogger(name).setLevel(logging.INFO)
         logging.getLogger(name).propagate = False
     check_infretis()
-    check_restart_file(args.input)
 
     server_dir, hq_bin = args.hq_server_dir, None
 
     def make_backend() -> Backend:
-        return hq.HQBackend(server_dir, crash_limit=args.crash_limit,
-                            time_request=args.time_request, hq_bin=hq_bin)
+        return hq.HQBackend(server_dir, time_request=args.time_request, hq_bin=hq_bin)
 
     resources = {"cores": args.cores_per_task, "cwd": os.getcwd()}
     factory = make_factory(make_backend, args.spool, resources)
@@ -266,14 +197,17 @@ def main(argv: list[str] | None = None) -> int:
             hq_bin = str(Path(own_hq.enter_context(hq.server_and_worker(
                 ROOT, Path(server_dir), "gutsrun", cores))) / "hq")
             log.info("own hq server in %s, worker with %d cores", server_dir, cores)
-        config, reason = setup(args.input)
+        # infretis says why it refuses on its "main" logger, which only has
+        # a NullHandler until the run starts; show the reason on stderr.
+        to_stderr = logging.StreamHandler()
+        to_stderr.setLevel(logging.WARNING)
+        logging.getLogger("main").addHandler(to_stderr)
+        try:
+            config = setup_config(args.input)
+        finally:
+            logging.getLogger("main").removeHandler(to_stderr)
         if config is None:
-            if done(args.input):
-                log.info("nothing to do: %s", reason)
-                print(f"nothing to do: {reason}", file=sys.stderr)
-                return EXIT_DONE
-            log.warning("infretis refused to start: %s", reason)
-            print(f"infretis refused to start: {reason}", file=sys.stderr)
+            log.warning("infretis refused to start; its reason is on stderr")
             return EXIT_REFUSED
         if "wmdrun" in config["runner"]:
             check_wmdrun(config["runner"]["wmdrun"], args.cores_per_task)

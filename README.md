@@ -124,7 +124,6 @@ infretis's own outputs, as without gutsrun, plus:
   or were cancelled at a stop (those of finished moves are deleted). The
   next link's launcher deletes them.
 - `gutsrun.log`: the launcher's log.
-- `restart.toml.bak.<step>`: a copy of `restart.toml` at each link's start.
 
 infretis writes its data to `infretis_data.txt`, unless that file exists
 when a run starts fresh: then to `infretis_data_1.txt` (`_2`, ...), and

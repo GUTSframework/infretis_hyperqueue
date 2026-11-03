@@ -157,7 +157,7 @@ class HQBackend:
       `task-failed` event, cut to about 2 KiB.
     - Logs of finished tasks are deleted by HQ (`:rm-if-finished`); those of
       failed and cancelled tasks are kept.
-    - HQ reruns a task whose worker crashed, up to `crash_limit` times.
+    - HQ reruns a task whose worker crashed (HQ's default limit).
     - HQ 0.26.2 cancels whole jobs only, so `close()` cancels every task in
       flight at once, with SIGINT to each task's process group.
 
@@ -165,7 +165,7 @@ class HQBackend:
     HQ's `--time-request` for every task, e.g. "30m": a worker with less
     time left does not start it (off when None). `hq_bin`: the hq CLI."""
 
-    def __init__(self, server_dir: str | Path | None = None, *, crash_limit: int = 2,
+    def __init__(self, server_dir: str | Path | None = None, *,
                  gpu_resource: str = "gpus/nvidia", time_request: str | None = None,
                  hq_bin: str | None = None) -> None:
         hq = hq_bin or shutil.which("hq")
@@ -174,7 +174,6 @@ class HQBackend:
         self.hq = [hq, "--output-mode", "quiet"]
         if server_dir is not None:
             self.hq += ["--server-dir", str(server_dir)]
-        self.crash_limit = crash_limit
         self.gpu_resource = gpu_resource
         self.time_request = time_request
         self.job = int(self._run("job", "open"))
@@ -196,7 +195,7 @@ class HQBackend:
     def submit(self, tid: str, argv: list[str], res: Resources, stdout: str,
                stderr: str) -> None:
         args = ["submit", "--job", str(self.job), "--array", str(int(tid)),
-                "--cpus", str(res.cores), "--crash-limit", str(self.crash_limit), "--task-dir",
+                "--cpus", str(res.cores), "--task-dir",
                 "--stdout", stdout.format(instance="%{INSTANCE_ID}") + ":rm-if-finished",
                 "--stderr", stderr.format(instance="%{INSTANCE_ID}") + ":rm-if-finished"]
         if res.gpus:

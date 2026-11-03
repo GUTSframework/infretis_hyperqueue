@@ -86,8 +86,7 @@ class InfretisRun:
             config = tomllib.loads(path.read_text())
             cstep, steps = config["current"]["cstep"], config["simulation"]["steps"]
         except (OSError, tomllib.TOMLDecodeError, KeyError) as e:
-            raise StateError(f"restart.toml in {rundir} does not parse ({e}); "
-                             "restore it from restart.toml.bak.*") from e
+            raise StateError(f"restart.toml in {rundir} does not parse ({e})") from e
         return Progress(cstep >= steps, f"step {cstep} of {steps}")
 
     def before_link(self, rundir: Path, link: int) -> None:

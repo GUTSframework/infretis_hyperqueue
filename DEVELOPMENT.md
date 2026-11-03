@@ -212,7 +212,7 @@ fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})
   format is HQ's own: check it when upgrading HQ. HQ 0.26.2 cancels whole
   jobs only, so shutting down cancels the job (`hq job cancel J
   --reason ...`), with SIGINT to each task's process group. HQ reruns a
-  task after a worker crash (`crash_limit`, default 2); the rerun gets a
+  task after a worker crash (up to HQ's default limit); the rerun gets a
   new instance number.
 - **Completion** from the backend (under HQ, `task-finished` events): the
   executor then reads `out/<tid>.pkl`, retrying for up to 60 s in case the
@@ -259,17 +259,17 @@ shared GROMACS inputs alone (the parent writes them once at setup, and
 refuses engines that share an `input_path` with different settings) and
 stop their MD program on SIGTERM, infretis stops gracefully on
 SIGTERM/SIGINT (after the result it is recording, `restart.toml` last),
-and a refused setup logs why. The launcher adds, for this run only: a
-`restart.toml` backup at start, and under HQ a check of `wmdrun`: no
-pinning flags (HQ places the tasks), and `-ntomp` equal to
-`--cores-per-task`; a `wmdrun` that fails it is refused, not rewritten. At start it refuses an
-infretis without the `executor_factory` hook, the graceful stop, the
-GROMACS inputs written at setup or the workers' SIGTERM handling. The
-fork's other fixes (atomic `restart.toml`, no busy spin in the parent,
-restarts from the run's seed) apply to bare runs too. Exit codes: 0 done
-(or nothing to do), 1 an error (traceback in `gutsrun.log` and on
-stderr), 3 stopped by a signal, 4 infretis refused to start (its reason
-on stderr). Logs: `gutsrun.log`; moves log to `worker{pin}.log`, as
+and a refused setup (a finished run included) says why on stderr. The
+launcher adds a check of `wmdrun`: no pinning flags (HQ places the
+tasks), and `-ntomp` equal to `--cores-per-task`; a `wmdrun` that fails it
+is refused, not rewritten. At start it refuses an infretis that pip
+installed from another commit than the pin (one installed from a local
+directory records no commit, and only gets a warning). The fork's other
+fixes (atomic `restart.toml`, no busy spin in the parent, restarts from
+the run's seed) apply to bare runs too. Exit codes: 0 done, 1 an error
+(traceback in `gutsrun.log` and on stderr), 3 stopped by a signal, 4
+infretis refused to start, also for a run that is already done (its
+reason on stderr). Logs: `gutsrun.log`; moves log to `worker{pin}.log`, as
 under plain infretis.
 
 ## Chains

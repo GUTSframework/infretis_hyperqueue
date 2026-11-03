@@ -24,6 +24,7 @@ from conftest import wait_for  # noqa: E402
 
 from gutsrun_infretis.launcher import (  # noqa: E402
     EXIT_DONE,
+    EXIT_REFUSED,
     EXIT_STOPPED,
     check_wmdrun,
 )
@@ -80,28 +81,17 @@ def test_check_wmdrun():
     check_wmdrun(["gmx_pin mdrun -ntomp 2 -deffnm x-pin"], 2)  # not flags
 
 
-def test_infretis_without_executor_hook_refused(monkeypatch):
-    """An infretis without the executor_factory hook cannot run."""
+def test_infretis_from_another_commit_refused(monkeypatch):
+    """pip keeps an old infretis with the same version number, so the
+    launcher compares the installed commit with the pin."""
     from gutsrun_infretis import launcher
 
     launcher.check_infretis()  # the pinned one passes
-    monkeypatch.setattr(launcher, "scheduler", lambda config: None)
-    with pytest.raises(SystemExit, match="lacks the executor_factory hook"):
+    monkeypatch.setattr(launcher, "infretis_commit", lambda: "a42e039" + "0" * 33)
+    with pytest.raises(SystemExit, match="infretis a42e039 is installed, not the pinned"):
         launcher.check_infretis()
-
-
-def test_infretis_without_the_later_fixes_refused(monkeypatch):
-    """An infretis with the hook and the graceful stop, but whose workers
-    rewrite the GROMACS inputs or leave MD programs running, cannot run."""
-    import infretis.asyncrunner
-
-    from gutsrun_infretis import launcher
-
-    monkeypatch.setattr(launcher, "create_engines", lambda config: None)
-    monkeypatch.delattr(infretis.asyncrunner, "WorkerTerminated")
-    with pytest.raises(SystemExit, match="lacks GROMACS inputs written once at setup, "
-                                         "workers that stop their MD program"):
-        launcher.check_infretis()
+    monkeypatch.setattr(launcher, "infretis_commit", lambda: None)
+    launcher.check_infretis()  # a local install: only a warning
 
 
 def test_2d_potential_run(tmp_path):
@@ -127,7 +117,6 @@ def test_sigterm_then_restart(tmp_path):
 
     rec = run("2d_potential", rd, "--restart", "--runner", "gutsrun", "--kill-after", "6")
     assert rec["returncode"] in (EXIT_STOPPED, EXIT_DONE)
-    assert list(rd.glob("restart.toml.bak.*")), "restart.toml was not backed up"
     nums = path_numbers(rd)
     assert len(nums) == len(set(nums)), "duplicate path numbers after restart"
 
@@ -224,7 +213,7 @@ def test_exact_lammps_workers_1(tmp_path):
 
 
 def test_finished_run_launched_again_then_continued(tmp_path):
-    """Launching a finished run does nothing (infretis says so) and changes
+    """Launching a finished run is refused (infretis says why) and changes
     nothing, so raising its steps continues it."""
     import tomli
     import tomli_w
@@ -235,8 +224,8 @@ def test_finished_run_launched_again_then_continued(tmp_path):
     left = (rd / "restart.toml").read_bytes()
     proc = launch(rd, "-i", "restart.toml")
     out, _ = proc.communicate(timeout=600)
-    assert proc.returncode == EXIT_DONE, out
-    assert "nothing to do: restart.toml: the run is done" in out
+    assert proc.returncode == EXIT_REFUSED, out
+    assert "restart.toml: the run is done" in out
     assert (rd / "restart.toml").read_bytes() == left
 
     config = tomli.loads(left.decode())
