@@ -148,9 +148,10 @@ differ between clusters:
 
 - **Policy limits.** Some clusters limit the walltime by policy rather
   than in Slurm, e.g. DAS-6's 15 minutes during the day.
-  `max_walltime_day` holds such a limit; `submit` then refuses a longer
-  `time` unless given `--night`. Where Slurm itself enforces the limits,
-  leave it out.
+  `max_walltime_day` holds such a limit; a chain without its own `time`
+  then gets just under it. Nothing stops a longer `time`: keeping to the
+  policy is up to you. Where Slurm itself enforces the limits, leave it
+  out.
 - **How the MD engine is loaded.** Usually a site module, whose name
   differs from cluster to cluster. `[environment] setup` holds the lines
   that load it (e.g. `module load GROMACS`); each link runs them before

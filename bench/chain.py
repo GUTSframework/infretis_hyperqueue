@@ -22,7 +22,7 @@ from datetime import date
 from pathlib import Path
 
 from gutsrun.chain import ROOT, ChainError, Spec, StateError, check_time, setup_logging, start
-from gutsrun.site import Site, SiteError
+from gutsrun.site import SiteError
 from gutsrun_infretis.chain import InfretisRun
 
 CASES = {"2d": "examples/2d_potential", "lammps": "examples/water_dissociation_lammps"}
@@ -73,8 +73,6 @@ def main() -> None:
     p.add_argument("--site", default="das6")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                    help="config override as in bench/bare_run.py, e.g. output.delete_old=true")
-    p.add_argument("--night", action="store_true",
-                   help="allow a walltime beyond the site's daytime limit")
     p.add_argument("--no-submit", action="store_true",
                    help="prepare the run and its chain, submit nothing, print the spec's "
                         "path: run links by hand with `python -m gutsrun.chain link`")
@@ -92,12 +90,12 @@ def main() -> None:
                       "cores_per_task": args.cores_per_task},
                 time=args.time, margin=args.margin, links=args.links, nodes=args.nodes)
     try:
-        check_time(spec, Site(ROOT, args.site), args.night)  # before preparing the run
+        check_time(spec)  # before preparing the run
         rundir.parent.mkdir(parents=True, exist_ok=True)
         bare_run.prepare(argparse.Namespace(
             example=Path(example), rundir=rundir, workers=args.workers, steps=args.steps,
             seed=None, wmdrun=None, cores_per_worker=1, set=args.set))
-        print(start(spec, night=args.night, submit_first=not args.no_submit))
+        print(start(spec, submit_first=not args.no_submit))
     except (ChainError, SiteError, StateError) as e:
         sys.exit(str(e))
 

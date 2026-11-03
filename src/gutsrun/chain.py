@@ -212,13 +212,8 @@ def walltime(secs: int) -> str:
     return f"{secs // 3600}:{secs % 3600 // 60:02d}:{secs % 60:02d}"
 
 
-def check_time(spec: Spec, site: Site, night: bool = False) -> None:
-    """Refuse a walltime at or over the site's daytime limit (unless `night`),
-    or too short to run anything before SIGTERM."""
-    limit = site.max_walltime_day
-    if limit and not night and seconds(spec.time) >= seconds(limit):
-        raise ChainError(f"time {spec.time} is not below the daytime limit {limit} "
-                         "(allow with --night)")
+def check_time(spec: Spec) -> None:
+    """Refuse a walltime too short to run anything before SIGTERM."""
     if seconds(spec.time) <= spec.margin + 60:
         raise ChainError(f"time {spec.time} leaves no time to run before SIGTERM "
                          f"(margin {spec.margin} s, which Slurm may bring forward by 60 s)")
@@ -289,9 +284,7 @@ def sbatch_argv(spec: Spec, site: Site, link: int, after: str | None = None) -> 
     argv = ["sbatch", "--parsable", f"--job-name=gutsrun-{spec.name}-{link}",
             f"--partition={site.partition}", f"--nodes={spec.nodes}", f"--time={spec.time}",
             f"--signal=B:TERM@{spec.margin}", f"--chdir={spec.rundir}",
-            f"--output={spec.dir / f'link{link}-%j.out'}"]
-    if site.exclusive:
-        argv.append("--exclusive")
+            f"--output={spec.dir / f'link{link}-%j.out'}", "--exclusive"]
     if after:
         argv.append(f"--dependency=afterany:{after}")
     return [*argv, f"--wrap={command}"]
@@ -315,7 +308,7 @@ class Plan:
     revision: str  # of the gutsrun checkout
 
 
-def check(spec: Spec, night: bool = False, submitting: bool = True) -> Plan:
+def check(spec: Spec, submitting: bool = True) -> Plan:
     """Everything `start()` checks, without writing anything. Raises
     ChainError, or StateError if the run's state is unreadable. A run
     directory can take a new chain once the last one has no jobs left in
@@ -323,7 +316,7 @@ def check(spec: Spec, night: bool = False, submitting: bool = True) -> Plan:
     link run by hand."""
     root = Path(spec.root)
     site = Site(root, spec.site)
-    check_time(spec, site, night)
+    check_time(spec)
     if submitting and not shutil.which("sbatch"):
         raise ChainError("no sbatch on PATH; submit from the cluster's login node")
     if not Path(spec.rundir).is_dir():
@@ -356,7 +349,7 @@ def check(spec: Spec, night: bool = False, submitting: bool = True) -> Plan:
     return Plan(site, progress, rev)
 
 
-def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
+def start(spec: Spec, *, submit_first: bool = True) -> str:
     """Check (see `check()`) and save a new chain in an existing run
     directory and submit its first link; returns the job id. With
     `submit_first=False`, returns the spec's path instead, to run
@@ -365,7 +358,7 @@ def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
     The spec is saved before link 1 is submitted, since link 1 may start
     and read it at once. If sbatch refuses link 1, the record says so and
     ChainError says why; `status` then reports this chain, with no link."""
-    plan = check(spec, night, submitting=submit_first)
+    plan = check(spec, submitting=submit_first)
     spec.dir.mkdir(exist_ok=True)
     spec.stop_file.unlink(missing_ok=True)
     spec.save()

@@ -19,7 +19,7 @@ class Site:
     environment variable GUTSRUN_CORES overrides `cores_per_node`, for tests
     and for trying a link on a machine without Slurm."""
 
-    KEYS = {"slurm": {"partition", "cores_per_node", "exclusive", "max_walltime_day"},
+    KEYS = {"slurm": {"partition", "cores_per_node", "max_walltime_day"},
             "environment": {"setup"}}
 
     def __init__(self, root: str | Path, name: str) -> None:
@@ -37,10 +37,6 @@ class Site:
         slurm = data.get("slurm", {})
         self.partition: str = slurm["partition"]
         self.cores: int = int(os.environ.get("GUTSRUN_CORES") or slurm["cores_per_node"])
-        self.exclusive: bool = slurm.get("exclusive", True)
-        if not self.exclusive:
-            raise SiteError(f"{path}: exclusive = false is not supported yet: the HQ "
-                            "worker would claim every core of a node it shares")
         self.max_walltime_day: str | None = slurm.get("max_walltime_day")
         self.setup: str | None = data.get("environment", {}).get("setup")
 

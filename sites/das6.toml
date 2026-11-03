@@ -7,7 +7,6 @@
 partition = "defq"
 # Slurm reports 48 CPUs: 24 cores with two hardware threads each.
 cores_per_node = 24
-exclusive = true
 # DAS-6 policy for 08:00-20:00; Slurm itself sets no limit.
 max_walltime_day = "00:15:00"
 # (Never pass --mem on DAS-6: Slurm has no memory configured.)

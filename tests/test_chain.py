@@ -180,9 +180,6 @@ def test_site_refusals(project):
     path.write_text(path.read_text() + "typo = 1\n")
     with pytest.raises(SiteError, match="unknown in \\[slurm\\]: typo"):
         Site(project.root, "test")
-    path.write_text('[slurm]\npartition = "q"\ncores_per_node = 2\nexclusive = false\n')
-    with pytest.raises(SiteError, match="not supported"):
-        Site(project.root, "test")
     with pytest.raises(SiteError, match="known: test"):
         Site(project.root, "nosuch")
 
@@ -236,8 +233,6 @@ def test_start_refusals(project):
     def spec(**changes) -> Spec:
         return dataclasses.replace(project.make_spec(), **changes)
 
-    with pytest.raises(ChainError, match="daytime limit"):
-        start(spec(time="00:15:00"), submit_first=False)
     with pytest.raises(ChainError, match="no time to run"):
         start(spec(time="00:02:00"), submit_first=False)
     with pytest.raises(ChainError, match="no run directory"):
@@ -253,7 +248,7 @@ def test_start_refusals(project):
     with pytest.raises(ChainError, match="does not run its tasks through HQ"):
         start(spec(nodes=2), submit_first=False)
     (project.rundir / "state.json").unlink()
-    start(spec(time="00:15:00"), night=True, submit_first=False)
+    start(spec(time="00:15:00"), submit_first=False)  # the daytime limit is not enforced
 
 
 def test_sbatch_missing_or_refusing(project, monkeypatch):
@@ -552,7 +547,7 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
     assert spec.args == {"cores_per_task": 2, "time_request": "30m"}
     assert spec.workload == "gutsrun_infretis.chain:InfretisRun"
 
-    lines = cli.describe(spec, night=False)
+    lines = cli.describe(spec)
     assert lines[0] == "checks passed: run on test, not started (no restart.toml)"
     assert lines[-1].startswith("would submit link 1 of 5: sbatch --parsable")
     assert not spec.dir.exists() and project.calls("sbatch") == []  # nothing written

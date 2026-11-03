@@ -147,9 +147,9 @@ def make_spec(rundir: Path, options: dict[str, Any], root: str | Path = ROOT) ->
     return spec
 
 
-def describe(spec: Spec, night: bool) -> list[str]:
+def describe(spec: Spec) -> list[str]:
     """What `submit` would do, after the checks; writes nothing."""
-    plan = check(spec, night)
+    plan = check(spec)
     lines = [f"checks passed: {spec.name} on {spec.site}, {plan.progress.text}"]
     lines.append(f"would submit link 1 of {spec.links}: "
                  f"{shlex.join(sbatch_argv(spec, plan.site, 1))}")
@@ -167,8 +167,6 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_argument("rundir", nargs="?", type=Path, default=Path.cwd())
     for key, (kind, text) in CONFIG.items():
         sub.add_argument(f"--{key.replace('_', '-')}", dest=key, type=kind, help=text)
-    sub.add_argument("--night", action="store_true",
-                     help="allow a walltime beyond the site's max_walltime_day")
     sub.add_argument("--check", action="store_true",
                      help="run the checks and show the sbatch command; submit nothing")
 
@@ -196,9 +194,9 @@ def main(argv: list[str] | None = None) -> None:
         if args.command == "submit":
             spec = make_spec(args.rundir, {key: getattr(args, key) for key in CONFIG})
             if args.check:
-                print(*describe(spec, args.night), sep="\n")
+                print(*describe(spec), sep="\n")
             else:
-                job = start(spec, night=args.night)
+                job = start(spec)
                 print(f"link 1: job {job}; follow it with `gutsrun-infretis status --follow`")
         elif args.command == "status":
             spec = load_spec(args.rundir)

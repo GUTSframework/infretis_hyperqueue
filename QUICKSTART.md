@@ -131,10 +131,10 @@ What to look at in the run directory:
 ## 6. Longer runs
 
 - **Night and weekend links.** Outside 08:00–20:00 longer jobs are allowed:
-  `gutsrun-infretis submit --night --time 03:00:00`. Without `--night`,
-  `submit` refuses a walltime of 15 minutes or more. `--night` only lifts
-  that check: submit such links in the evening or at the weekend
-  (DAS-6 policy, not enforced by Slurm).
+  `gutsrun-infretis submit --time 03:00:00`. Nothing checks the time of
+  day: submit such links in the evening or at the weekend (DAS-6 policy,
+  not enforced by Slurm). Without `--time`, links get just under 15
+  minutes.
 - **More steps.** The run is done when `current.cstep` reaches
   `simulation.steps`. To run further, raise `steps` in `restart.toml` (not
   `infretis.toml`) and `submit` again.
