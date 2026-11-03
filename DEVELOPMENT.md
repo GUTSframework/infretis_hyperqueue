@@ -86,7 +86,6 @@ flowchart TB
         ghq["hq.py<br/>HQ server and workers in a job,<br/>HQBackend: tasks through the hq CLI"]
         gsite["site.py<br/>sites/*.toml, setup"]
         executor["executor.py<br/>TaskExecutor, Backend, Resources"]
-        spool["spool.py<br/>layout, atomic files"]
         task["task.py<br/>one task process"]
     end
     subgraph infretis["infretis, GUTS fork"]
@@ -108,11 +107,9 @@ flowchart TB
     launcher -- "subclasses" --> executor
     sched --> repex
     sched -- "submit(partial(run_md, md_items))" --> executor
-    executor --> spool
     executor -- "HQBackend" --> ghq
     ghq -- "hq submit, hq journal stream" --> hq
     hq --> task
-    task --> spool
     task -. "unpickles and runs" .-> worker
     worker --> engines
 ```
@@ -132,12 +129,12 @@ sequenceDiagram
 
     R->>R: REPEX_state.pick: ensemble, path, random stream
     R->>X: submit(partial(run_md, md_items))
-    X->>S: in/{tid}.pkl: sys.path and the call (temp file, rename)
+    X->>S: in/{tid}.pkl: sys.path and the call
     X->>H: hq submit --job {link's job} --array {tid}:<br/>python -m gutsrun.task {dir} {tid}
     H->>T: starts it on a worker, with its cores
     T->>S: read in/{tid}.pkl
     T->>T: worker_initializer: build the engines<br/>run_md: logs to worker{pin}.log, runs lmp or gmx
-    T->>S: out/{tid}.pkl (temp file, rename)
+    T->>S: out/{tid}.pkl
     H->>X: task-finished, in hq journal stream
     X->>S: read out/{tid}.pkl
     X->>R: the future's result
@@ -190,25 +187,22 @@ ex = TaskExecutor(HQBackend(server_dir), "runs/x/spool",
 fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})
 ```
 
-- **Spool directory**, one subdirectory per executor instance: `in/`
-  holds the pickled calls, `out/` the results (`<tid>.pkl`, temp +
-  rename), `log/` stdout/stderr (`<tid>.<instance>.{out,err}`; HQ deletes
-  them when the task finishes, `:rm-if-finished`, and keeps those of
-  failed and cancelled tasks). A new executor deletes the older
-  subdirectories, so a queued task of an older executor (after a killed
-  launcher on a long-lived HQ server) fails without running. One that
-  already runs keeps running its move in `worker{pin}/` and fails only
-  when it publishes: cancel such tasks (`hq job cancel all`) before
-  starting a launcher on that server. A directory a stale task still has
-  files open in can stay behind (on NFS, as `.nfs*` files) until a later
-  executor removes it. In a chain none of this happens: each link has a
-  fresh HQ server, and Slurm ends a link's tasks with its job.
+- **Spool directory**, one subdirectory per executor (layout in
+  `executor.py`'s docstring): `in/` holds the pickled calls, `out/` the
+  results (`<tid>.pkl`), `log/` stdout/stderr (`<tid>.<instance>.{out,err}`;
+  HQ deletes them when the task finishes, `:rm-if-finished`, and keeps
+  those of failed and cancelled tasks). Files are written plainly: each
+  is read only after its writer closed it. Older executors' directories
+  stay. Nothing protects an executor from tasks of an earlier one on the
+  same HQ server: in a chain each link has a fresh server, and the
+  launcher's own server lives as long as the launcher.
 - **HQ through its CLI only.** `HQBackend` opens one HQ job (`hq job
   open`) and submits each call as the task of that job whose id is the
   executor's task id (`hq submit --job J --array <tid>`): a program task
   carrying two paths (payload rule), which needs no HQ Python package. One
-  `hq journal stream` reports when tasks end; it replays every event since
-  the server started, so a restarted stream misses nothing. The event
+  `hq journal stream` reports when tasks end, starting with every event
+  since the server started; if it ends while the executor runs, the moves
+  in flight fail (the run stops, and its next start redoes them). The event
   format is HQ's own: check it when upgrading HQ. HQ 0.26.2 cancels whole
   jobs only, so shutting down cancels the job (`hq job cancel J
   --reason ...`), with SIGINT to each task's process group. HQ reruns a

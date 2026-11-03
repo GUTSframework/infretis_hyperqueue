@@ -150,8 +150,8 @@ class HQBackend:
       job whose id is the executor's task id as a number (`--array <tid>`),
       so tids must be numbers. HQ refuses a second task with the same id.
     - Completion comes from one `hq journal stream`, which prints an event
-      per line; it first replays every event since the server started, so
-      a restarted stream misses nothing.
+      per line, starting with every event since the server started. If it
+      ends while the backend is open, the tasks in flight fail.
     - A task reports its error by writing it to $HQ_ERROR_FILENAME (set with
       `--task-dir`) and exiting non-zero; the text arrives in the
       `task-failed` event, cut to about 2 KiB.
@@ -180,7 +180,8 @@ class HQBackend:
         self._live: dict[int, str] = {}  # HQ task id -> tid, until reported ended
         self._ended: queue.SimpleQueue[tuple[int, str | None]] = queue.SimpleQueue()
         self._closing = False
-        self._stream: subprocess.Popen[str] | None = None
+        self._stream = subprocess.Popen([*self.hq, "journal", "stream"], stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True)
         self._reader = threading.Thread(target=self._read_events, name="gutsrun-hq-events",
                                         daemon=True)
         self._reader.start()
@@ -218,7 +219,7 @@ class HQBackend:
         while not self._ended.empty():
             task, error = self._ended.get()
             tid = self._live.pop(task, None)
-            if tid is not None:  # None: a replayed event repeated an end
+            if tid is not None:  # None: its end was reported already
                 ended.append((tid, error))
         return ended
 
@@ -228,36 +229,23 @@ class HQBackend:
             if self._live:
                 self._run("job", "cancel", str(self.job), "--reason", reason)
             self._run("job", "close", str(self.job))
-        if self._stream is not None and self._stream.poll() is None:
+        if self._stream.poll() is None:
             self._stream.terminate()
         self._reader.join(timeout=5)
 
     def _read_events(self) -> None:
         """Turn the job's task events into (task, None | error) on `_ended`.
-        Restarts a stream that ends while the backend is open; if it cannot
-        start at all, every task in flight fails."""
-        while not self._closing:
-            self._stream = subprocess.Popen(
-                [*self.hq, "journal", "stream"], stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True)
-            if self._closing:  # close() came while it started
-                self._stream.terminate()
-            assert self._stream.stdout is not None
-            lines = 0
-            for line in self._stream.stdout:
-                lines += 1
-                for task, error in self._task_ends(json.loads(line)["event"]):
-                    self._ended.put((task, error))
-            self._stream.wait()
-            if self._closing:
-                return
+        If the stream ends while the backend is open, every task in flight
+        fails: the run stops, and its next start redoes them."""
+        assert self._stream.stdout is not None
+        for line in self._stream.stdout:
+            for task, error in self._task_ends(json.loads(line)["event"]):
+                self._ended.put((task, error))
+        self._stream.wait()
+        if not self._closing:
             stderr = self._stream.stderr.read().strip() if self._stream.stderr else ""
-            if lines == 0:
-                for task in list(self._live):
-                    self._ended.put((task, f"hq journal stream failed: {stderr}"))
-                return
-            log.warning(f"hq journal stream ended ({stderr}); restarting it")
-            time.sleep(1)
+            for task in list(self._live):
+                self._ended.put((task, f"hq journal stream ended: {stderr}"))
 
     def _task_ends(self, event: dict[str, Any]) -> list[tuple[int, str | None]]:
         """(task, None) for a finished task of this job, (task, error) for a

@@ -8,10 +8,6 @@ exits 1.
 
 HQ cancels a task with SIGINT to its process group; Python raises
 KeyboardInterrupt for it, so the call unwinds as for any other exception.
-
-If a newer executor took over the spool, this executor's directory is
-gone: a task that had not started fails before running (no input); one
-that had runs its call and fails when publishing.
 """
 
 import os
@@ -19,8 +15,6 @@ import pickle
 import signal
 import sys
 from pathlib import Path
-
-from gutsrun import spool
 
 ERROR_LIMIT = 1900  # characters; HQ keeps about 2 KiB of a task's error
 
@@ -51,12 +45,12 @@ def main(argv: list[str]) -> int:
     try:
         if initializer is not None:
             initializer(*initargs)
-        data = spool.dump(fn(*args, **kwargs))
+        data = pickle.dumps(fn(*args, **kwargs))
     except BaseException:  # noqa: BLE001 - the caller decides
         import traceback  # only on errors: ~15 ms of every task's start-up
 
         return _fail(traceback.format_exc())
-    spool.write_atomic(task_dir / "out" / f"{tid}.pkl", data)
+    (task_dir / "out" / f"{tid}.pkl").write_bytes(data)
     return 0
 
 

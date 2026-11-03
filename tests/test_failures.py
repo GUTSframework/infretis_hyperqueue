@@ -1,10 +1,7 @@
-"""Failure injection: a coordinator killed with tasks in flight, an HQ
-worker killed under a running task."""
+"""Failure injection on a real HQ server: a worker killed under a running
+task, a task that cannot start, a cancel, a lost event stream."""
 
-import os
 import signal
-import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -14,37 +11,6 @@ from conftest import wait_for
 
 from gutsrun import TaskExecutor, TaskFailed
 from gutsrun.hq import HQBackend
-
-HERE = Path(__file__).parent
-
-
-def test_coordinator_restart_with_tasks_in_flight(hq_cluster, tmp_path):
-    """Kill the coordinator while its tasks run; a new one takes over the
-    spool. The orphaned tasks finish but publish nothing (their directory
-    is gone), and the new executor works normally."""
-    spool_dir = tmp_path / "spool"
-    started = tmp_path / "started"
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(HERE.parent / "src"), str(HERE)])}
-    old = subprocess.Popen(
-        [sys.executable, str(HERE / "coordinator.py"), str(hq_cluster.dir), str(spool_dir),
-         str(started), "3", "2"],
-        stdout=subprocess.PIPE, text=True, env=env)
-    assert old.stdout is not None
-    old_dir = old.stdout.readline().strip()
-    wait_for(lambda: len(list(tmp_path.glob("started*"))) == 2, what="old tasks started")
-    old.send_signal(signal.SIGKILL)
-    old.wait()
-
-    ex = TaskExecutor(HQBackend(hq_cluster.dir), spool_dir)
-    try:
-        assert ex.dir.name != old_dir
-        assert not (spool_dir / old_dir).exists()
-        assert ex.submit(helpers.square, 5).result(timeout=60) == 25
-        time.sleep(4)  # the orphans finish (3 s) and must not publish
-        assert os.listdir(ex.dir / "out") == []
-        assert [p.name for p in spool_dir.iterdir()] == [ex.dir.name]
-    finally:
-        ex.shutdown()
 
 
 def test_hq_reruns_task_after_worker_crash(hq_cluster, tmp_path):
@@ -108,3 +74,18 @@ def test_hq_time_request_holds_a_move_that_would_not_fit(tmp_path):
         too_long.shutdown(wait=False, cancel_futures=True)
     finally:
         cluster.stop()
+
+
+def test_hq_lost_event_stream_fails_the_tasks_in_flight(hq_cluster, tmp_path):
+    """The run then stops, and its next start redoes the moves."""
+    backend = HQBackend(hq_cluster.dir)
+    ex = TaskExecutor(backend, tmp_path / "spool")
+    started = tmp_path / "started"
+    try:
+        fut = ex.submit(helpers.slow, str(started), 60.0)
+        wait_for(lambda: Path(f"{started}.0").exists(), what="task started")
+        backend._stream.kill()
+        with pytest.raises(TaskFailed, match="hq journal stream ended"):
+            fut.result(timeout=10)
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)

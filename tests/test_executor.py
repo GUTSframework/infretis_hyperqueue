@@ -4,12 +4,13 @@ fake backend."""
 import asyncio
 import functools
 import os
+import pickle
 import time
 
 import helpers
 import pytest
 
-from gutsrun import TaskExecutor, TaskFailed, spool
+from gutsrun import TaskExecutor, TaskFailed
 from gutsrun.executor import Resources
 
 
@@ -118,7 +119,7 @@ def test_a_result_that_shows_late_is_still_read(tmp_path):
         backend.ended.append(("00000000", None))
         time.sleep(0.2)
         assert not fut.done()
-        spool.write_atomic(ex.dir / "out" / "00000000.pkl", spool.dump(9))
+        (ex.dir / "out" / "00000000.pkl").write_bytes(pickle.dumps(9))
         assert fut.result(timeout=5) == 9
         assert os.listdir(ex.dir / "out") == os.listdir(ex.dir / "in") == []
         backend.ended.append(("00000000", None))  # a repeated event changes nothing
@@ -159,22 +160,3 @@ def test_unpicklable_result(make_executor):
     fut = ex.submit(functools.partial(eval, "lambda: 1"))
     with pytest.raises(TaskFailed, match="pickle"):
         fut.result(timeout=60)
-
-
-def test_queued_task_of_a_taken_over_spool_does_not_run(tmp_path):
-    """A task that had not started when a newer executor removed its
-    executor's directory does not run."""
-    from gutsrun import task
-    spool_dir = tmp_path / "spool"
-    old = spool_dir / "old"
-    for sub in ("in", "out", "log"):
-        (old / sub).mkdir(parents=True)
-    marker = tmp_path / "ran"
-    (old / "in" / "00000000.pkl").write_bytes(
-        spool.dump([], (helpers.touch, (str(marker),), {}, None, ())))
-
-    TaskExecutor(Ends(), spool_dir).shutdown()
-    assert not old.exists()
-    with pytest.raises(FileNotFoundError):
-        task.main([str(old), "00000000"])
-    assert not marker.exists()

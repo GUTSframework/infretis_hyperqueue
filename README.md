@@ -120,9 +120,9 @@ infretis's own outputs, as without gutsrun, plus:
 - `.gutsrun/chain.json`: the chain's settings.
 - `.gutsrun/link<n>-<job>-hq-server.log`, `-hq-worker.log` and, with
   `nodes` > 1, `-hq-worker-<node>.log` for each other node: HQ's own logs.
-- `gutsrun-spool/<executor>/log/`: stdout and stderr of moves that failed
-  or were cancelled at a stop (those of finished moves are deleted). The
-  next link's launcher deletes them.
+- `gutsrun-spool/<executor>/log/`, one directory per link: stdout and
+  stderr of moves that failed or were cancelled at a stop (those of
+  finished moves are deleted). Delete old ones when you like.
 - `gutsrun.log`: the launcher's log.
 
 infretis writes its data to `infretis_data.txt`, unless that file exists

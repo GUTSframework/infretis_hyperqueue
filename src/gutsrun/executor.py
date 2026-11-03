@@ -19,12 +19,28 @@ Completion: a watcher thread asks the backend every `poll_interval` which
 tasks ended (under HQ, from its event stream), and reads the result file
 of each one that finished. Inputs and results of ended tasks are deleted
 (inode budget); the backend deletes the logs of tasks that finished.
+
+Each executor has its own directory in the spool directory; those of
+earlier executors stay until someone deletes them:
+
+    <spool>/<executor>/in/<tid>.pkl    the call: sys.path, then (fn, args,
+                                       kwargs, initializer, initargs)
+    <spool>/<executor>/out/<tid>.pkl   the value of a call that returned
+    <spool>/<executor>/log/<tid>.<instance>.{out,err}   kept for failed and
+                                       cancelled tasks (the instance goes up
+                                       when HQ reruns a task after its
+                                       worker crashed)
+
+Files are written plainly. A task reads its input after the executor has
+closed it, and the executor reads a result only once the backend reports
+the task finished, so a reader on another node sees the whole file (NFS
+gives that guarantee from close to open).
 """
 
 import logging
 import os
 import pickle
-import shutil
+import secrets
 import sys
 import threading
 import time
@@ -33,8 +49,6 @@ from concurrent.futures import Executor, Future
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
-
-from gutsrun import spool
 
 log = logging.getLogger(__name__)
 
@@ -97,7 +111,7 @@ class TaskExecutor(Executor):
     `python -m gutsrun.task` process; see the module docstring.
 
     - `spool_dir`: where calls, results and task logs go; on a file system
-      the tasks can reach. A new executor takes it over from an old one.
+      the tasks can reach.
     - `max_workers`: informational, for code that reads it; the backend
       limits how many tasks run at once.
     - `initializer(*initargs)`: runs in the task process before every call.
@@ -124,10 +138,10 @@ class TaskExecutor(Executor):
         self.result_timeout = result_timeout
 
         self.spool = Path(spool_dir).resolve()
-        self.dir = self.spool / spool.new_name()
+        # Sorts by start time, and does not collide.
+        self.dir = self.spool / f"{time.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(4)}"
         for sub in ("in", "out", "log"):
             (self.dir / sub).mkdir(parents=True)
-        self._take_over_spool()
 
         self._lock = threading.Lock()  # guards _pending, _seq and backend calls
         self._pending: dict[str, Future[Any]] = {}
@@ -151,9 +165,9 @@ class TaskExecutor(Executor):
                 raise RuntimeError("cannot schedule new futures after shutdown")
             tid = f"{self._seq:08d}"
             self._seq += 1
-            spool.write_atomic(
-                self.dir / "in" / f"{tid}.pkl",
-                spool.dump(sys.path, (fn, args, kwargs, self.initializer, self.initargs)))
+            (self.dir / "in" / f"{tid}.pkl").write_bytes(
+                pickle.dumps(sys.path)
+                + pickle.dumps((fn, args, kwargs, self.initializer, self.initargs)))
             future: Future[T] = Future()
             future.set_running_or_notify_cancel()  # it runs as soon as the backend starts it
             self._pending[tid] = future
@@ -191,17 +205,6 @@ class TaskExecutor(Executor):
             self._pending.clear()
 
     # --- internals ------------------------------------------------------------
-
-    def _take_over_spool(self) -> None:
-        """Remove the directories of older executors (left by a killed
-        launcher on a long-lived HQ server). Their queued tasks then fail
-        without running: their input is gone. A task that already runs
-        keeps running its call and fails only when it publishes. A
-        directory whose files are still open may stay behind (NFS); a
-        later executor removes it."""
-        for d in self.spool.iterdir():
-            if d.is_dir() and d != self.dir:
-                shutil.rmtree(d, ignore_errors=True)
 
     def _watch(self) -> None:
         while not self._stop.is_set():

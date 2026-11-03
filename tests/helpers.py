@@ -49,10 +49,6 @@ def slow(started: str, seconds: float, value: Any = None) -> Any:
     return value if value is not None else instance()
 
 
-def touch(path: str) -> str:
-    Path(path).touch()
-    return path
-
 
 def long_traceback(msg: str) -> None:
     """Raise ValueError(msg), caused by a RuntimeError with a 3,000-character
