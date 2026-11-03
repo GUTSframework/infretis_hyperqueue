@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from gutsrun.backends import Resources
+from gutsrun.executor import Resources
 
 VERSION = "0.26.2"  # keep in sync with flake.nix and scripts/get-hq.sh
 
@@ -63,7 +63,10 @@ def server_and_worker(root: str | Path, server: Path, log_prefix: str, cores: in
 
     The access file (`<server>/access.json`: host, ports, keys) is written
     before the server starts, so workers on other nodes can start at any
-    time: they find it, and retry every 2 s until the server listens."""
+    time: they find it, and retry every 2 s until the server listens.
+
+    Both run in a session of their own: a Ctrl-C in the terminal goes to
+    the caller, which stops its tasks before the `with` block stops HQ."""
     hq = binary(root)
     shutil.rmtree(server, ignore_errors=True)
     server.mkdir(parents=True)
@@ -77,7 +80,7 @@ def server_and_worker(root: str | Path, server: Path, log_prefix: str, cores: in
         with open(f"{log_prefix}-hq-server.log", "wb") as out:
             processes.append(subprocess.Popen(
                 [hq, "server", "start", "--server-dir", str(server), "--access-file", str(access)],
-                stdout=out, stderr=subprocess.STDOUT))
+                stdout=out, stderr=subprocess.STDOUT, start_new_session=True))
         # The server writes hq-current on this node, so no NFS cache hides it.
         deadline = time.monotonic() + 60
         while not (server / "hq-current").exists():
@@ -87,7 +90,7 @@ def server_and_worker(root: str | Path, server: Path, log_prefix: str, cores: in
         with open(f"{log_prefix}-hq-worker.log", "wb") as out:
             processes.append(subprocess.Popen(
                 [hq, "worker", "start", "--server-dir", str(server), "--cpus", str(cores)],
-                stdout=out, stderr=subprocess.STDOUT, env=env))
+                stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True))
         log.info(f"hq server and worker started in {server}")
         yield str(Path(hq).parent)
     finally:

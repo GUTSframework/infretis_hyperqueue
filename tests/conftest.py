@@ -9,8 +9,7 @@ from typing import Any
 import pytest
 
 from gutsrun import TaskExecutor
-from gutsrun.backends import Backend
-from gutsrun.backends.local import LocalBackend
+from gutsrun.hq import HQBackend
 
 HQ_CPUS = 4
 
@@ -78,24 +77,21 @@ def hq_cluster(tmp_path: Path) -> Iterator[HQCluster]:
     cluster.stop()
 
 
-@pytest.fixture(params=["local", pytest.param("hq", marks=pytest.mark.hq)])
-def make_executor(request: pytest.FixtureRequest,
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Mark `hq` every test that needs an HQ server, for `-m "not hq"`."""
+    for item in items:
+        if {"hq_cluster", "make_executor"} & set(getattr(item, "fixturenames", ())):
+            item.add_marker(pytest.mark.hq)
+
+
+@pytest.fixture
+def make_executor(hq_cluster: HQCluster,
                   tmp_path: Path) -> Iterator[Callable[..., TaskExecutor]]:
-    """Factory for a TaskExecutor on either backend; shuts them down after."""
+    """Factory for a TaskExecutor on a fresh HQ server; shuts them down after."""
     made: list[TaskExecutor] = []
-    cluster: HQCluster | None = None
-    if request.param == "hq":
-        cluster = request.getfixturevalue("hq_cluster")
 
     def make(**kwargs: Any) -> TaskExecutor:
-        if request.param == "local":
-            backend: Backend = LocalBackend(max_workers=kwargs.pop("max_workers", 4))
-        else:
-            from gutsrun.hq import HQBackend
-            kwargs.pop("max_workers", None)
-            assert cluster is not None
-            backend = HQBackend(cluster.dir)
-        ex = TaskExecutor(backend, tmp_path / "spool", **kwargs)
+        ex = TaskExecutor(HQBackend(hq_cluster.dir), tmp_path / "spool", **kwargs)
         made.append(ex)
         return ex
 

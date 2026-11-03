@@ -1,10 +1,16 @@
 """Run infretis with gutsrun instead of ProcessPoolExecutor.
 
-    python -m gutsrun_infretis.launcher -i infretis.toml --backend local
-    python -m gutsrun_infretis.launcher -i restart.toml --backend hq --cores-per-task 2
-    python -m gutsrun_infretis.launcher -i restart.toml --backend hq --time-request 30m
+    python -m gutsrun_infretis.launcher -i infretis.toml
+    python -m gutsrun_infretis.launcher -i restart.toml --cores-per-task 2
+    python -m gutsrun_infretis.launcher -i restart.toml --time-request 30m
 
-Run it in the infretis run directory, like `infretisrun`. It needs the
+Run it in the infretis run directory, like `infretisrun`. Each move runs as
+an HQ task: on the server in $HQ_SERVER_DIR (or --hq-server-dir), as in a
+chain's link; without one, the launcher runs its own HQ server and a
+worker on all the cores it may use, for this run (server directory
+`gutsrun-hq/`, logs `gutsrun-hq-server.log` and `gutsrun-hq-worker.log`).
+
+It needs the
 infretis pinned in requirements.txt (the GUTS fork, branch `guts`): its
 `scheduler` takes an `executor_factory`, through which the launcher passes
 a factory that returns a gutsrun TaskExecutor; its worker initializer
@@ -14,11 +20,11 @@ SIGTERM, and it stops gracefully on SIGTERM and SIGINT. What the launcher
 adds, for this run only:
 
 - `restart.toml` is backed up and parse-checked at start.
-- Under HQ, a `wmdrun` with `-pin on|auto`/`-pinoffset`/`-pinstride` is refused
+- A `wmdrun` with `-pin on|auto`/`-pinoffset`/`-pinstride` is refused
   (HQ places tasks, so fixed offsets would put moves on the same cores),
   and so is one whose `-ntomp` differs from --cores-per-task (HQ sets
   OMP_NUM_THREADS to it; GROMACS aborts on a mismatch).
-- Under HQ, `--time-request` (e.g. 30m) keeps a worker from starting a
+- `--time-request` (e.g. 30m) keeps a worker from starting a
   move unless it has that much time left. Off by default; set it to about
   the longest move plus the chain's SIGTERM margin.
 - A stop signal that comes before infretis's scheduler takes over the
@@ -32,6 +38,7 @@ gutsrun.log), other = error.
 """
 
 import argparse
+import contextlib
 import inspect
 import json
 import logging
@@ -53,8 +60,9 @@ from infretis.classes.engines.factory import create_engines
 from infretis.scheduler import scheduler
 from infretis.setup import setup_config
 
-from gutsrun import TaskExecutor
-from gutsrun.backends import Backend
+from gutsrun import TaskExecutor, hq
+from gutsrun.chain import ROOT
+from gutsrun.executor import Backend
 
 TESTED_COMMIT = "bf813ee"  # the fork's commit in requirements.txt
 EXIT_DONE, EXIT_STOPPED, EXIT_REFUSED = 0, 3, 4
@@ -73,7 +81,7 @@ class Stop(BaseException):
 EXECUTORS: list[TaskExecutor] = []
 
 
-def make_factory(make_backend: Callable[[int | None], Backend], spool_dir: str,
+def make_factory(make_backend: Callable[[], Backend], spool_dir: str,
                  resource_dict: dict[str, Any]) -> Callable[..., TaskExecutor]:
     """infretis's `executor_factory`: takes ProcessPoolExecutor's arguments
     and returns a TaskExecutor, which runs infretis's initializer before
@@ -82,7 +90,7 @@ def make_factory(make_backend: Callable[[int | None], Backend], spool_dir: str,
     def factory(max_workers: int | None = None, initializer: Callable[..., object] | None = None,
                 initargs: tuple[Any, ...] = (), mp_context: object = None) -> TaskExecutor:
         ex = TaskExecutor(
-            make_backend(max_workers), spool_dir, max_workers=max_workers,
+            make_backend(), spool_dir, max_workers=max_workers,
             initializer=initializer, initargs=initargs, resource_dict=resource_dict)
         EXECUTORS.append(ex)
         log.info("gutsrun executor: %s", ex.dir)
@@ -216,12 +224,13 @@ def done(inp: str) -> bool:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     p.add_argument("-i", "--input", required=True)
-    p.add_argument("--backend", choices=["local", "hq"], default="local")
-    p.add_argument("--hq-server-dir", default=os.environ.get("HQ_SERVER_DIR"))
+    p.add_argument("--hq-server-dir", default=os.environ.get("HQ_SERVER_DIR"),
+                   help="the HQ server to run moves on (default: $HQ_SERVER_DIR, else "
+                        "a server of the launcher's own)")
     p.add_argument("--spool", default="gutsrun-spool")
     p.add_argument("--cores-per-task", type=int, default=1)
     p.add_argument("--crash-limit", type=int, default=2)
-    p.add_argument("--time-request", help="HQ: start a move only on a worker with this "
+    p.add_argument("--time-request", help="start a move only on a worker with this "
                                           "much time left, e.g. 30m (default: off)")
     args = p.parse_args(argv)
 
@@ -235,25 +244,28 @@ def main(argv: list[str] | None = None) -> int:
     check_infretis()
     check_restart_file(args.input)
 
-    def local_backend(max_workers: int | None) -> Backend:
-        from gutsrun.backends.local import LocalBackend
+    server_dir, hq_bin = args.hq_server_dir, None
 
-        return LocalBackend(max_workers=max_workers)
-
-    def hq_backend(max_workers: int | None) -> Backend:
-        from gutsrun.hq import HQBackend
-
-        return HQBackend(args.hq_server_dir, crash_limit=args.crash_limit,
-                         time_request=args.time_request)
-
-    make_backend = local_backend if args.backend == "local" else hq_backend
+    def make_backend() -> Backend:
+        return hq.HQBackend(server_dir, crash_limit=args.crash_limit,
+                            time_request=args.time_request, hq_bin=hq_bin)
 
     resources = {"cores": args.cores_per_task, "cwd": os.getcwd()}
     factory = make_factory(make_backend, args.spool, resources)
     for sig in STOP_SIGNALS:
         signal.signal(sig, stop_once)
 
+    own_hq = contextlib.ExitStack()
     try:
+        if server_dir is None:
+            cores = len(os.sched_getaffinity(0))
+            if args.cores_per_task > cores:
+                sys.exit(f"--cores-per-task is {args.cores_per_task}, but this machine "
+                         f"lets the launcher use only {cores} cores")
+            server_dir = str(Path("gutsrun-hq").resolve())
+            hq_bin = str(Path(own_hq.enter_context(hq.server_and_worker(
+                ROOT, Path(server_dir), "gutsrun", cores))) / "hq")
+            log.info("own hq server in %s, worker with %d cores", server_dir, cores)
         config, reason = setup(args.input)
         if config is None:
             if done(args.input):
@@ -263,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
             log.warning("infretis refused to start: %s", reason)
             print(f"infretis refused to start: {reason}", file=sys.stderr)
             return EXIT_REFUSED
-        if args.backend == "hq" and "wmdrun" in config["runner"]:
+        if "wmdrun" in config["runner"]:
             check_wmdrun(config["runner"]["wmdrun"], args.cores_per_task)
         stopped = scheduler(config, executor_factory=factory)
         ignore_stop_signals()
@@ -282,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         ignore_stop_signals()  # a late signal must not interrupt the shutdown
         for ex in EXECUTORS:
             ex.shutdown(wait=False, cancel_futures=True)
+        own_hq.close()  # after the executors: they cancel their HQ jobs
 
 
 if __name__ == "__main__":

@@ -13,12 +13,12 @@ import pytest
 from conftest import wait_for
 
 from gutsrun import TaskExecutor, TaskFailed
-from gutsrun.backends.local import LocalBackend
+from gutsrun.hq import HQBackend
 
 HERE = Path(__file__).parent
 
 
-def test_coordinator_restart_with_tasks_in_flight(tmp_path):
+def test_coordinator_restart_with_tasks_in_flight(hq_cluster, tmp_path):
     """Kill the coordinator while its tasks run; a new one takes over the
     spool. The orphaned tasks finish but publish nothing (their directory
     is gone), and the new executor works normally."""
@@ -26,7 +26,8 @@ def test_coordinator_restart_with_tasks_in_flight(tmp_path):
     started = tmp_path / "started"
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(HERE.parent / "src"), str(HERE)])}
     old = subprocess.Popen(
-        [sys.executable, str(HERE / "coordinator.py"), str(spool_dir), str(started), "3", "2"],
+        [sys.executable, str(HERE / "coordinator.py"), str(hq_cluster.dir), str(spool_dir),
+         str(started), "3", "2"],
         stdout=subprocess.PIPE, text=True, env=env)
     assert old.stdout is not None
     old_dir = old.stdout.readline().strip()
@@ -34,7 +35,7 @@ def test_coordinator_restart_with_tasks_in_flight(tmp_path):
     old.send_signal(signal.SIGKILL)
     old.wait()
 
-    ex = TaskExecutor(LocalBackend(max_workers=2), spool_dir)
+    ex = TaskExecutor(HQBackend(hq_cluster.dir), spool_dir)
     try:
         assert ex.dir.name != old_dir
         assert not (spool_dir / old_dir).exists()
@@ -46,10 +47,7 @@ def test_coordinator_restart_with_tasks_in_flight(tmp_path):
         ex.shutdown()
 
 
-@pytest.mark.hq
 def test_hq_reruns_task_after_worker_crash(hq_cluster, tmp_path):
-    from gutsrun.hq import HQBackend
-
     ex = TaskExecutor(HQBackend(hq_cluster.dir), tmp_path / "spool")
     try:
         started = tmp_path / "started"
@@ -64,10 +62,7 @@ def test_hq_reruns_task_after_worker_crash(hq_cluster, tmp_path):
         ex.shutdown()
 
 
-@pytest.mark.hq
 def test_hq_task_that_cannot_start_reports_why(hq_cluster, tmp_path):
-    from gutsrun.hq import HQBackend
-
     ex = TaskExecutor(HQBackend(hq_cluster.dir), tmp_path / "spool")
     try:
         # The interpreter cannot start: the task fails without a result.
@@ -78,12 +73,9 @@ def test_hq_task_that_cannot_start_reports_why(hq_cluster, tmp_path):
         ex.shutdown()
 
 
-@pytest.mark.hq
 def test_hq_shutdown_cancels_running_tasks_with_sigint(hq_cluster, tmp_path):
     """HQ cancels with SIGINT to the task's process group; the call unwinds
     (an MD engine would stop its program there) and the task's log stays."""
-    from gutsrun.hq import HQBackend
-
     ex = TaskExecutor(HQBackend(hq_cluster.dir), tmp_path / "spool")
     started = tmp_path / "started"
     fut = ex.submit(helpers.slow, str(started), 60.0)
@@ -101,8 +93,6 @@ def test_hq_time_request_holds_a_move_that_would_not_fit(tmp_path):
     import shutil
 
     from conftest import HQCluster
-
-    from gutsrun.hq import HQBackend
 
     if shutil.which("hq") is None:
         pytest.skip("no hq binary (run inside `nix develop`)")

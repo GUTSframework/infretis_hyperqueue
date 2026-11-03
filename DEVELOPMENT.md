@@ -85,10 +85,9 @@ flowchart TB
         gchain["chain.py<br/>chain of links, workloads"]
         ghq["hq.py<br/>HQ server and workers in a job,<br/>HQBackend: tasks through the hq CLI"]
         gsite["site.py<br/>sites/*.toml, setup"]
-        executor["executor.py<br/>TaskExecutor"]
+        executor["executor.py<br/>TaskExecutor, Backend, Resources"]
         spool["spool.py<br/>layout, atomic files"]
         task["task.py<br/>one task process"]
-        backends["backends/<br/>Backend, Resources, local.py"]
     end
     subgraph infretis["infretis, GUTS fork"]
         sched["scheduler, asyncrunner<br/>executor_factory hook, graceful stop"]
@@ -110,9 +109,7 @@ flowchart TB
     sched --> repex
     sched -- "submit(partial(run_md, md_items))" --> executor
     executor --> spool
-    executor --> backends
     executor -- "HQBackend" --> ghq
-    backends -- "local: subprocess" --> task
     ghq -- "hq submit, hq journal stream" --> hq
     hq --> task
     task --> spool
@@ -123,7 +120,7 @@ flowchart TB
 ### One move
 
 What happens between infretis picking a move and saving its result,
-with the HQ backend (the local backend starts the task process itself).
+each one an HQ task.
 
 ```mermaid
 sequenceDiagram
@@ -169,7 +166,7 @@ bench/bare_run.py       run bare infretis on an example, record run.json
 bench/chain.py          chains of an example with either runner (the bare-vs-gutsrun rows)
 bench/move_times.py     per-move time statistics from sim.log
 examples/               prepared infentory cases (examples/README.md)
-src/gutsrun/            generic: TaskExecutor + backends; chain.py chains Slurm jobs, hq.py and site.py (no MD imports)
+src/gutsrun/            generic: TaskExecutor; hq.py runs its tasks on HQ; chain.py chains Slurm jobs; site.py (no MD imports)
 src/gutsrun_infretis/   infretis adapter, launcher, chain workload and command (the only infretis-aware code)
 tests/                  pytest suite (adapter tests need infretis)
 ```
@@ -179,11 +176,13 @@ tests/                  pytest suite (adapter tests need infretis)
 ## gutsrun
 
 `gutsrun.TaskExecutor` is a `concurrent.futures.Executor`: each `submit`
-runs as one backend task, a fresh `python -m gutsrun.task` process.
+runs as one HQ task, a fresh `python -m gutsrun.task` process. The
+`Backend` protocol in `executor.py` is the seam between the two: the
+tests use fake backends there.
 
 ```python
 from gutsrun import TaskExecutor
-from gutsrun.hq import HQBackend        # or gutsrun.backends.local.LocalBackend
+from gutsrun.hq import HQBackend
 
 ex = TaskExecutor(HQBackend(server_dir), "runs/x/spool",
                   initializer=init, initargs=(cfg,),        # runs before every call
@@ -233,20 +232,25 @@ fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})
 - **Like `ProcessPoolExecutor` with spawn:** calls and results must pickle
   by reference; the caller's `sys.path` is sent along. Unlike it, the
   initializer runs before every call, and failures arrive as `TaskFailed`.
-- Both backends set `OMP_NUM_THREADS` to the task's cores (HQ does so for
-  every task).
+- HQ sets `OMP_NUM_THREADS` to the task's cores for every task.
 
 ## The launcher
 
 In an infretis run directory, instead of `infretisrun -i infretis.toml`:
 
 ```bash
-.venv/bin/python -m gutsrun_infretis.launcher -i infretis.toml --backend local
+.venv/bin/python -m gutsrun_infretis.launcher -i infretis.toml
 HQ_SERVER_DIR=... .venv/bin/python -m gutsrun_infretis.launcher \
-    -i restart.toml --backend hq --cores-per-task 2 [--time-request 30m]
+    -i restart.toml --cores-per-task 2 [--time-request 30m]
 ```
 
-or `bench/bare_run.py ... --runner gutsrun [--backend hq]`. The launcher
+or `bench/bare_run.py ... --runner gutsrun`. Moves run on the HQ server
+in `$HQ_SERVER_DIR` (a chain's link sets it). Without one, the launcher
+starts its own server and a worker on all the cores it may use, for the
+run (`gutsrun-hq/`, removed at the end; logs `gutsrun-hq-*.log`), in a
+session of their own so that a Ctrl-C stops infretis gracefully before
+HQ. There is no HQ-free mode: plain `infretisrun` is the baseline. The
+launcher
 passes infretis a `TaskExecutor` factory (`executor_factory`, a hook in the
 GUTS fork, `requirements.txt`), which runs infretis's own worker
 initializer before every move. In the fork, the initializer needs no
@@ -303,7 +307,7 @@ The tests do the same through `start(spec, submit_first=False)`.
 ```bash
 nix develop --command .venv/bin/python -m pytest          # all but slow (~1 min)
 nix develop --command .venv/bin/python -m pytest -m slow  # LAMMPS exact check (~1 min)
-.venv/bin/python -m pytest -m "not hq"                    # without the dev shell: gutsrun only
+.venv/bin/python -m pytest -m "not hq"                    # without hq: chain, site, executor on fakes
 ```
 
 Without Nix, drop the `nix develop --command` prefix, and call ruff and
@@ -319,7 +323,9 @@ nix develop --command pyright
 ```
 
 The chain tests fake `sbatch`, `scancel` and `squeue` and run links as
-local processes. The HQ tests start `hq server` and `hq worker` processes,
+local processes. Every test that needs HQ is marked `hq` (conftest adds
+the mark to tests using its `hq_cluster` or `make_executor` fixture, and
+the launcher tests start their own server). The HQ tests start `hq server` and `hq worker` processes,
 which need TCP on localhost. They cannot run inside Claude Code's sandbox.
 
 ## Getting started (local)

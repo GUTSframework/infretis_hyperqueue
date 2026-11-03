@@ -15,8 +15,8 @@ For GROMACS examples, `--wmdrun` is a template expanded once per worker with
     --wmdrun "gmx mdrun -ntomp 2 -ntmpi 1 -pin on -pinoffset {offset} -pinstride 1" \
     --cores-per-worker 2
 
-With `--runner gutsrun --backend hq`, leave out the pinning flags: HQ
-places the tasks, and the launcher refuses them.
+With `--runner gutsrun`, leave out the pinning flags: HQ places the
+tasks, and the launcher refuses them.
 
 To restart a run in place, pass `--restart`: it runs `infretisrun -i
 restart.toml` in the existing directory instead of copying. `--in-place`
@@ -32,7 +32,8 @@ ProcessPoolExecutor workers would otherwise outlive it.
 
 `--runner gutsrun` runs the same thing through the gutsrun launcher
 (`python -m gutsrun_infretis.launcher`) instead of `infretisrun`, with
-`--backend local|hq` and `--cores-per-task`.
+`--cores-per-task`. Its moves run on the HQ server in $HQ_SERVER_DIR, or
+on one the launcher starts for the run.
 """
 
 import argparse
@@ -85,7 +86,6 @@ def parse_args() -> argparse.Namespace:
         help="run in the prepared RUNDIR: restart.toml if there is one, else infretis.toml",
     )
     p.add_argument("--runner", choices=["bare", "gutsrun"], default="bare")
-    p.add_argument("--backend", choices=["local", "hq"], default="local")
     p.add_argument("--cores-per-task", type=int, default=1)
     return p.parse_args()
 
@@ -161,7 +161,7 @@ def main() -> None:
                "-i", inp]
     else:
         cmd = [sys.executable, "-m", "gutsrun_infretis.launcher", "-i", inp,
-               "--backend", args.backend, "--cores-per-task", str(args.cores_per_task)]
+               "--cores-per-task", str(args.cores_per_task)]
         src = str(Path(__file__).resolve().parent.parent / "src")
         env = {**os.environ, "PYTHONPATH": os.pathsep.join(
             p for p in (src, os.environ.get("PYTHONPATH")) if p)}
@@ -200,7 +200,6 @@ def main() -> None:
         "stopped_by": stopped_by,
         "command": cmd,
         "runner": args.runner,
-        "backend": args.backend if args.runner == "gutsrun" else None,
         "input": inp,
         "example": str(args.example),
         "host": platform.node(),

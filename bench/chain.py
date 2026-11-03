@@ -7,8 +7,8 @@ comparison on a cluster. Run it on the login node, from the project root:
 
 case: 2d (examples/2d_potential) or lammps (examples/water_dissociation_lammps;
 needs an `lmp` on the nodes). runner: bare (infretis's own
-ProcessPoolExecutor, the baseline row) or gutsrun (the launcher with the HQ
-backend). The run directory is runs/<site>/<date>-<case>-<runner>, prepared
+ProcessPoolExecutor, the baseline row) or gutsrun (the launcher, each move
+an HQ task). The run directory is runs/<site>/<date>-<case>-<runner>, prepared
 here as bench/bare_run.py does; each link runs bare_run.py --in-place there,
 which records run.json. Prints link 1's job id, for scripts/wait-jobs.sh;
 `gutsrun-infretis status <run directory>` reports on the chain.
@@ -50,7 +50,7 @@ class BenchRun(InfretisRun):
         argv = [python, str(BENCH / "bare_run.py"), self.example, str(rundir), "--in-place",
                 "--runner", self.runner]
         if self.runner == "gutsrun":
-            argv += ["--backend", "hq", "--cores-per-task", str(self.cores_per_task)]
+            argv += ["--cores-per-task", str(self.cores_per_task)]
         return argv
 
 

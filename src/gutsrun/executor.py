@@ -1,4 +1,5 @@
-"""A `concurrent.futures.Executor` that runs each call as a backend task.
+"""A `concurrent.futures.Executor` that runs each call as a task of a
+backend (HyperQueue: `gutsrun.hq.HQBackend`).
 
 Drop-in for `ProcessPoolExecutor` where the caller only uses `submit`,
 `map` and `shutdown` (infretis does, through `loop.run_in_executor`).
@@ -29,11 +30,11 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from concurrent.futures import Executor, Future
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar
 
 from gutsrun import spool
-from gutsrun.backends import Backend, Resources
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +45,51 @@ T = TypeVar("T")
 
 class TaskFailed(Exception):
     """The call raised, or the task process broke, or it was cancelled."""
+
+
+@dataclass
+class Resources:
+    """What one task needs. Modelled on executorlib's `resource_dict`."""
+
+    cores: int = 1
+    gpus: int = 0
+    cwd: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None, default: "Resources") -> "Resources":
+        """A copy of `default`, with the keys in `d` replaced (`env` is
+        merged). Never `default` itself: callers change what they get."""
+        d = d or {}
+        unknown = set(d) - {"cores", "gpus", "cwd", "env"}
+        if unknown:
+            raise ValueError(f"unknown resource keys: {sorted(unknown)}")
+        return cls(
+            cores=d.get("cores", default.cores),
+            gpus=d.get("gpus", default.gpus),
+            cwd=d.get("cwd", default.cwd),
+            env={**default.env, **d.get("env", {})},
+        )
+
+
+class Backend(Protocol):
+    """Starts task processes and reports the ones that ended; it never
+    sees the call or the result, which travel through the spool directory.
+    `gutsrun.hq.HQBackend` is the one in use; tests use fakes."""
+
+    def submit(self, tid: str, argv: list[str], res: Resources, stdout: str, stderr: str) -> None:
+        """Start (or queue) a task. `stdout`/`stderr` contain `{instance}`.
+        The task process finds a file to write its error to in
+        $HQ_ERROR_FILENAME. Logs of tasks that finish are deleted."""
+
+    def poll(self) -> list[tuple[str, str | None]]:
+        """Tasks that ended since the last call: (tid, None) for a clean
+        exit, (tid, message) for a failure, with the error the task wrote
+        if it wrote one."""
+        ...
+
+    def close(self) -> None:
+        """Cancel what is left and free the backend's resources."""
 
 
 class TaskExecutor(Executor):

@@ -549,7 +549,7 @@ def test_infretis_progress_and_argv(tmp_path):
     assert run.needs_hq
     assert not run.progress(tmp_path).done  # not started
     assert run.argv("py", tmp_path, 1) == [
-        "py", "-m", "gutsrun_infretis.launcher", "-i", "infretis.toml", "--backend", "hq",
+        "py", "-m", "gutsrun_infretis.launcher", "-i", "infretis.toml",
         "--cores-per-task", "2"]
     (tmp_path / "restart.toml").write_text(
         "[current]\ncstep = 40\n[simulation]\nsteps = 100\n")

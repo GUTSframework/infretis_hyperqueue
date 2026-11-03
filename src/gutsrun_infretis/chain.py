@@ -95,7 +95,7 @@ class InfretisRun:
 
     def argv(self, python: str, rundir: Path, link: int) -> list[str]:
         inp = "restart.toml" if (rundir / "restart.toml").exists() else "infretis.toml"
-        argv = [python, "-m", "gutsrun_infretis.launcher", "-i", inp, "--backend", "hq",
+        argv = [python, "-m", "gutsrun_infretis.launcher", "-i", inp,
                 "--cores-per-task", str(self.cores_per_task)]
         if self.time_request:
             argv += ["--time-request", self.time_request]

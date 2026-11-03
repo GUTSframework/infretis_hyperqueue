@@ -1,4 +1,5 @@
-"""Executor contract, run against both backends (local and HQ)."""
+"""Executor contract, on a real HQ server; and the executor alone, on a
+fake backend."""
 
 import asyncio
 import functools
@@ -9,7 +10,7 @@ import helpers
 import pytest
 
 from gutsrun import TaskExecutor, TaskFailed, spool
-from gutsrun.backends import Resources
+from gutsrun.executor import Resources
 
 
 def test_happy_path(make_executor):
@@ -164,8 +165,6 @@ def test_queued_task_of_a_taken_over_spool_does_not_run(tmp_path):
     """A task that had not started when a newer executor removed its
     executor's directory does not run."""
     from gutsrun import task
-    from gutsrun.backends.local import LocalBackend
-
     spool_dir = tmp_path / "spool"
     old = spool_dir / "old"
     for sub in ("in", "out", "log"):
@@ -174,7 +173,7 @@ def test_queued_task_of_a_taken_over_spool_does_not_run(tmp_path):
     (old / "in" / "00000000.pkl").write_bytes(
         spool.dump([], (helpers.touch, (str(marker),), {}, None, ())))
 
-    TaskExecutor(LocalBackend(max_workers=1), spool_dir).shutdown()
+    TaskExecutor(Ends(), spool_dir).shutdown()
     assert not old.exists()
     with pytest.raises(FileNotFoundError):
         task.main([str(old), "00000000"])

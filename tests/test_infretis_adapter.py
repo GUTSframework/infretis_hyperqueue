@@ -1,7 +1,8 @@
 """The infretis adapter and launcher, on real infretis runs.
 
 Needs infretis importable (inside `nix develop`: numpy/scipy need its
-libraries). The `slow` exact check runs LAMMPS (~3 min); run it with
+libraries) and hq: without --hq-server-dir, the launcher starts its own
+HQ server. The `slow` exact check runs LAMMPS (~3 min); run it with
 `pytest -m slow`.
 """
 
@@ -17,6 +18,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("infretis.setup", exc_type=ImportError)
+pytestmark = pytest.mark.hq
 
 from conftest import wait_for  # noqa: E402
 
@@ -200,8 +202,7 @@ def test_stop_before_the_first_move_leaves_restart_toml_alone(tmp_path):
 def test_launcher_through_hq(hq_cluster, tmp_path):
     rd = tmp_path / "run"
     prepare("2d_potential", rd, workers=2, steps=10)
-    proc = launch(rd, "-i", "infretis.toml", "--backend", "hq",
-                  "--hq-server-dir", str(hq_cluster.dir))
+    proc = launch(rd, "-i", "infretis.toml", "--hq-server-dir", str(hq_cluster.dir))
     out, _ = proc.communicate(timeout=600)
     assert proc.returncode == EXIT_DONE, out
     nums = path_numbers(rd)
