@@ -263,22 +263,12 @@ def test_sbatch_missing_or_refusing(project, monkeypatch):
         start(spec)
     assert not spec.dir.exists()  # nothing written
     project.use_fakes(monkeypatch, squeue="")
-    first = start(spec)
-    spec.stop_file.touch()  # the first chain was stopped
     (project.fakebin / "sbatch").write_text(
         "#!/usr/bin/env bash\necho 'sbatch: error: invalid partition specified' >&2\nexit 1\n")
     with pytest.raises(ChainError, match="sbatch refused link 1, nothing submitted: .*partition"):
-        start(dataclasses.replace(spec, site="test", name="typo"))
-    # status still reports on the first chain, as before the refused submit.
-    assert load_spec(project.rundir).name == "r" and spec.stop_file.exists()
-    assert [(e["event"], e.get("job")) for e in events(spec)] == [
-        ("chain", None), ("submitted", first)]
-    assert status(spec).over == "stopped by request; `submit` again to continue"
-    # A first chain that sbatch refuses leaves no spec and no chain behind.
-    shutil.rmtree(spec.dir)
-    with pytest.raises(ChainError, match="sbatch refused"):
         start(spec)
-    assert not spec.path.exists() and events(spec) == []
+    assert [e["event"] for e in events(spec)] == ["chain", "not submitted"]
+    assert status(spec).over == "no link was submitted"
 
 
 def test_a_new_chain_waits_for_the_last_to_leave_the_queue(project, monkeypatch):
@@ -514,9 +504,7 @@ def test_hq_workers_on_the_other_nodes(tmp_path):
                  "--cpus-per-task=2", f"--output={spec.dir}/link1-4242-hq-worker-%N.log",
                  "worker start --server-dir", "--cpus 2"]:
         assert part in srun
-    # Stopping the server ended the worker (HQ exits 1 then); srun was not killed.
-    assert "srun exit 1" in out
-    assert "forcing job termination" not in out
+    assert "hq workers on the other nodes: srun exit" in out  # the step ended
 
 
 # --- the infretis workload and gutsrun-infretis --------------------------------------

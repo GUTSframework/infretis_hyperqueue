@@ -11,7 +11,6 @@ import logging
 import queue
 import shlex
 import shutil
-import signal
 import socket
 import subprocess
 import threading
@@ -110,10 +109,9 @@ def workers_elsewhere(root: str | Path, server: Path, log_prefix: str, others: i
                       cores: int, env: dict[str, str] | None = None) -> Iterator[None]:
     """An HQ worker on each of the job's `others` other nodes for the `with`
     block, in one srun step, in `env` (srun passes the environment on to the
-    step); each logs to `<log_prefix>-hq-worker-<node>.log`. Stops them when
-    the block ends by stopping the HQ server: each worker then exits (code
-    1). srun does not pass SIGTERM on (it kills the step), so it is signalled
-    only if the step does not end by itself."""
+    step); each logs to `<log_prefix>-hq-worker-<node>.log`. When the block
+    ends, stops the HQ server, which ends the workers, and then the step:
+    srun answers SIGTERM by killing whatever of it is left."""
     hq = binary(root)
     # --relative=1: the nodes after the first, which runs this link.
     # --cpus-per-task: a step gets one CPU per task unless told otherwise,
@@ -129,16 +127,8 @@ def workers_elsewhere(root: str | Path, server: Path, log_prefix: str, others: i
     finally:
         subprocess.run([hq, "server", "stop", "--server-dir", str(server)],
                        capture_output=True)
-        try:
-            step.wait(timeout=60)
-        except subprocess.TimeoutExpired:
-            log.info("hq workers on the other nodes still running after 60 s; ending srun")
-            step.send_signal(signal.SIGTERM)
-            try:
-                step.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                step.kill()
-                step.wait()
+        step.terminate()
+        step.wait()
         log.info(f"hq workers on the other nodes: srun exit {step.returncode}")
 
 

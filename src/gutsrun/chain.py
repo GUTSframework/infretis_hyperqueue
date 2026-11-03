@@ -22,26 +22,22 @@ Each link:
 2. Submits the next link right away with the dependency `afterany` on this
    one: Slurm starts it once this job has ended in any state (finished,
    failed, cancelled, timed out). A link that is killed is still followed.
-3. Raises its limit on open files: the soft limit (1024 on DAS-6 compute
-   nodes) is the one in force, and a process may raise it up to the hard
-   limit. An HQ server and worker with many tasks hold many files and
-   sockets at once.
-4. If the site sets `[environment] setup`, runs those lines in bash, e.g.
+3. If the site sets `[environment] setup`, runs those lines in bash, e.g.
    `module load` for the programs the tasks call. The HQ workers, and so
    their tasks, and the workload run in the environment they leave.
-5. If the workload needs HQ: starts an HQ server and one worker inside the
+4. If the workload needs HQ: starts an HQ server and one worker inside the
    job, in a fresh server directory on the shared file system, without a
    journal. The workload's own state is what a restart continues from.
    With `nodes` > 1, starts one HQ worker on each of the job's other nodes
    too, in one srun step (`srun ... hq worker start`). At the end of the
    link, stopping the server ends these workers.
-6. Runs the workload's command in the run directory, passing SIGTERM and
+5. Runs the workload's command in the run directory, passing SIGTERM and
    SIGINT on. Slurm sends SIGTERM `margin` seconds before the walltime
    (`--signal=B:TERM@margin`), and may send it up to 60 s earlier than asked.
    A signal that comes before the workload has set up its own handler
    (for infretis: while it imports, about a second) kills it; the link then
    reports "failed (exit -15)", although nothing was written.
-7. Cancels the next link if the run is done, failed or stopped, or the link
+6. Cancels the next link if the run is done, failed or stopped, or the link
    itself crashed. A workload exits with EXIT_STOPPED when a signal stopped
    it and it can continue.
 
@@ -59,7 +55,6 @@ import importlib
 import json
 import logging
 import os
-import resource
 import shlex
 import shutil
 import signal
@@ -255,20 +250,10 @@ def note(spec: Spec, event: str, **fields: Any) -> None:
 
 
 def events(spec: Spec) -> list[dict[str, Any]]:
-    """The record of the chain last started: events since its "chain" event.
-    A chain whose link 1 sbatch refused never started: its "chain" event
-    and the "not submitted" one that follows it are left out."""
+    """The record of the chain last started: events since its "chain" event."""
     if not spec.record.exists():
         return []
-    entries = []
-    for line in spec.record.read_text().splitlines():
-        if not line:
-            continue
-        entry = json.loads(line)
-        if entry["event"] == "not submitted" and entries and entries[-1]["event"] == "chain":
-            entries.pop()
-        else:
-            entries.append(entry)
+    entries = [json.loads(line) for line in spec.record.read_text().splitlines() if line]
     starts = [i for i, e in enumerate(entries) if e["event"] == "chain"]
     return entries[starts[-1]:] if starts else entries
 
@@ -377,15 +362,11 @@ def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
     `submit_first=False`, returns the spec's path instead, to run
     `python -m gutsrun.chain link <spec> 1` by hand.
 
-    If sbatch refuses link 1, puts the previous chain's spec and stop file
-    back, so that `status` still reports on that chain, and raises
-    ChainError. No job of the previous chain is left to read them (see
-    `check()`); the new spec cannot be written only once link 1 is
-    accepted, since link 1 may start and read it at once."""
+    The spec is saved before link 1 is submitted, since link 1 may start
+    and read it at once. If sbatch refuses link 1, the record says so and
+    ChainError says why; `status` then reports this chain, with no link."""
     plan = check(spec, night, submitting=submit_first)
     spec.dir.mkdir(exist_ok=True)
-    previous = spec.path.read_bytes() if spec.path.exists() else None
-    was_stopped = spec.stop_file.exists()
     spec.stop_file.unlink(missing_ok=True)
     spec.save()
     # Noted before submitting: link 1 may start, and note "started", at once.
@@ -399,12 +380,6 @@ def start(spec: Spec, *, night: bool = False, submit_first: bool = True) -> str:
         error = (e.stderr or "").strip() if isinstance(e, subprocess.CalledProcessError) else ""
         error = error or str(e)
         note(spec, "not submitted", link=1, error=error)
-        if previous is None:
-            spec.path.unlink()
-        else:
-            spec.path.write_bytes(previous)
-        if was_stopped:
-            spec.stop_file.touch()
         raise ChainError(f"sbatch refused link 1, nothing submitted: {error}") from e
 
 
@@ -564,7 +539,7 @@ class Forwarder:
 
 
 def run_link(spec_path: str | Path, link: int) -> int:
-    """Run link number `link` of a chain (steps 1-8 in the module docstring);
+    """Run link number `link` of a chain (the steps in the module docstring);
     returns the job's exit code."""
     started = time.monotonic()
     forwarder = Forwarder()
@@ -616,10 +591,6 @@ def run_link(spec_path: str | Path, link: int) -> int:
             except subprocess.CalledProcessError as e:
                 log.info(f"could not submit the next link ({e.stderr.strip()}); "
                          "this one runs anyway")
-
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
-        log.info(f"open files: {soft} -> {hard}")
 
         exit_code = EXIT_STOPPED
         try:
