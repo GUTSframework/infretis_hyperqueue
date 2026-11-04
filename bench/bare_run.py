@@ -133,16 +133,14 @@ def prepare(args: argparse.Namespace) -> str:
 
 
 def git_head(path: Path) -> str | None:
-    """Short commit of the repo; on a cluster copy (no .git), the REVISION file
-    written by scripts/sync.sh push."""
+    """Short commit of the repo; None outside a git clone or without git."""
     try:
         return subprocess.run(
             ["git", "-C", str(path), "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, check=True,
         ).stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
-        revision = Path(path).resolve().parent / "REVISION"
-        return revision.read_text().strip() if revision.exists() else None
+        return None
 
 
 def main() -> None:

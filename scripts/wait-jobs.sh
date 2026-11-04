@@ -57,28 +57,28 @@ fi
 start=$SECONDS
 last="" failures=0 key=""
 while :; do
-    rc=0
-    out="$(ssh -q -o BatchMode=yes -o ConnectTimeout=15 "$host" "$query")" || rc=$?
-    if [ "$rc" = 255 ]; then
+    ssh_exit_status=0
+    out="$(ssh -q -o BatchMode=yes -o ConnectTimeout=15 "$host" "$query")" || ssh_exit_status=$?
+    if [ "$ssh_exit_status" = 255 ]; then
         failures=$((failures + 1))
         echo "$(date +%H:%M:%S)  ssh to $host failed ($failures/5)" >&2
         [ "$failures" -ge 5 ] && exit 1
     else
         failures=0
-        if [ -n "$rundir" ] && [ "$rc" != 0 ] && [ "$rc" != 10 ]; then
+        if [ -n "$rundir" ] && [ "$ssh_exit_status" != 0 ] && [ "$ssh_exit_status" != 10 ]; then
             [ -n "$out" ] && echo "$out" >&2
-            echo "gutsrun-infretis status failed (exit $rc)" >&2
+            echo "gutsrun-infretis status failed (exit $ssh_exit_status)" >&2
             exit 1
         fi
         if [ -n "$rundir" ]; then
             # Not every change: a running link's time and steps change at every poll.
             new_key="$(jq -c '[(.links | length), .over]' <<<"$out")"
-            if [ "$new_key" != "$key" ] || [ "$rc" = 0 ]; then
+            if [ "$new_key" != "$key" ] || [ "$ssh_exit_status" = 0 ]; then
                 echo "$(date +%H:%M:%S)"
                 jq -r '.lines[]' <<<"$out" | sed 's/^/    /'
                 key="$new_key"
             fi
-            [ "$rc" = 0 ] && break
+            [ "$ssh_exit_status" = 0 ] && break
         else
             if [ "$out" != "$last" ] && [ -n "$out" ]; then
                 echo "$(date +%H:%M:%S)  jobs left:"

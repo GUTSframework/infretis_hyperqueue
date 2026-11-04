@@ -220,12 +220,8 @@ def check_time(spec: Spec) -> None:
 
 
 def revision(root: str | Path) -> str:
-    """The project's commit: the REVISION file on a cluster copy (written by
-    scripts/sync.sh push, since .git is not copied), else git; "unknown"
-    without either."""
-    path = Path(root) / "REVISION"
-    if path.exists():
-        return path.read_text().strip()
+    """The project's commit, from git (`--dirty` if files differ from it);
+    "unknown" outside a git clone or without git."""
     try:
         out = subprocess.run(["git", "-C", str(root), "describe", "--always", "--dirty"],
                              capture_output=True, text=True)
@@ -344,8 +340,8 @@ def check(spec: Spec, submitting: bool = True) -> Plan:
         raise ChainError("no hq in bin/ or on PATH; run scripts/get-hq.sh")
     rev = revision(root)
     if rev == "unknown":
-        log.warning("warning: no REVISION file and no git; the runs will not record "
-                    "which code they ran (scripts/sync.sh push writes REVISION)")
+        log.warning("warning: not a git clone; the runs will not record which code "
+                    "they ran")
     return Plan(site, progress, rev)
 
 

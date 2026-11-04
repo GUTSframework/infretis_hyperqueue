@@ -154,7 +154,7 @@ requirements.txt        direct pins (infretis, inftools)
 requirements-lock.txt   exact versions, installed by setup-venv.sh
 scripts/get-hq.sh       pinned hq binary into ./bin, for clusters without Nix
 scripts/setup-venv.sh   .venv from the lock file, plus this checkout (editable); bin/gutsrun-infretis
-scripts/sync.sh         rsync the repo to a login node, pull runs/<site>/ back
+scripts/sync.sh         git push to the clone on a login node, rsync runs/<site>/ back
 scripts/wait-jobs.sh    poll a login node's squeue until jobs finish, optionally pull
 scripts/das6/           probe-login.sh (what the login node has, read-only);
                         install-engines.sh (GROMACS, LAMMPS from conda-forge)
@@ -367,7 +367,18 @@ On NixOS without the dev shell, pip's wheels (numpy, mdtraj) do not find
 ## DAS-6 workflow
 
 The login node (`fs0`) is reachable only from a university network or
-through eduVPN. Code goes there with `scripts/sync.sh <host> push` (which
-writes `REVISION`, since `.git` is not copied), and `runs/das6/` comes back
-with `pull`. `scripts/wait-jobs.sh <host> <jobid>` (or `--run <rundir>` for a
-chain) waits on the laptop until jobs are done.
+through eduVPN. The code there is a git clone, the same as a user's
+(QUICKSTART steps 1 and 2), set up once to accept pushes:
+
+```bash
+git -C ~/infretis_hyperqueue config receive.denyCurrentBranch updateInstead   # on fs0
+```
+
+`scripts/sync.sh <host> push` then pushes the laptop's `HEAD` to the
+branch checked out there, and its files follow. Only commits travel: to
+try a change on DAS-6, commit it (a WIP commit can be amended later; the
+push is forced). Runs record the clone's `git describe --dirty`. The push
+is refused if files in the clone were changed there, rather than
+overwriting them. `scripts/sync.sh <host> pull` brings `runs/das6/` back.
+`scripts/wait-jobs.sh <host> <jobid>` (or `--run <rundir>` for a chain)
+waits on the laptop until jobs are done.

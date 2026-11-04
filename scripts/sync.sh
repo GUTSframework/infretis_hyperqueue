@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
-# Sync this repo with a cluster login node: rsync, so the cluster needs no
-# git remote and the laptop's uncommitted changes can be tried.
+# Sync this repo with a git clone of it on a cluster login node.
 #
 # Usage: scripts/sync.sh <host> [push|pull|both]    (default: both)
 #
-#   push  code -> <host>:$REMOTE_DIR. Deletes remote files removed here,
-#         except the excluded paths, which are never touched: the remote's
-#         own .venv/, bin/ and runs/ stay as they are. Writes REVISION there
-#         (`git describe --always --dirty`), since .git is not copied;
-#         bench/bare_run.py records it as the run's commit.
-#   pull  <host>:$REMOTE_DIR/runs/$SITE/ -> runs/$SITE/ (adds and updates,
-#         never deletes).
+#   push  this repo's HEAD -> the branch checked out in <host>:$REMOTE_DIR,
+#         with git (forced, so rewritten commits go too). The clone's files
+#         follow, and runs there record the commit. Only commits travel:
+#         uncommitted changes stay here (push says so).
+#   pull  <host>:$REMOTE_DIR/runs/$SITE/ -> runs/$SITE/ with rsync (adds and
+#         updates, never deletes). runs/ is not tracked by git.
 #
 # REMOTE_DIR defaults to infretis_hyperqueue (relative to the remote home),
 # SITE to das6.
+#
+# Once, on the login node, in the clone (git 2.4 or later):
+#
+#   git config receive.denyCurrentBranch updateInstead
+#
+# It lets a push update the checked-out branch and its files, and refuses
+# the push if files there were changed, instead of overwriting them.
 set -euo pipefail
 
 host="${1:?usage: scripts/sync.sh <host> [push|pull|both]}"
@@ -23,14 +28,12 @@ site="${SITE:-das6}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 
 push() {
-    rsync -av --delete \
-        --exclude .git/ --exclude .venv/ --exclude bin/ --exclude runs/ \
-        --exclude work/ --exclude result --exclude __pycache__/ \
-        --exclude .pytest_cache/ --exclude .claude/ --exclude .idea/ --exclude .vscode/ \
-        --exclude /REVISION \
-        "$root/" "$host:$remote_dir/"
-    git -C "$root" describe --always --dirty --abbrev=7 \
-        | ssh -q "$host" "cat > '$remote_dir/REVISION'"
+    local branch
+    branch="$(ssh -q "$host" "git -C '$remote_dir' symbolic-ref --short HEAD")"
+    if [ -n "$(git -C "$root" status --porcelain --untracked-files=no)" ]; then
+        echo "note: uncommitted changes stay here; only $(git -C "$root" rev-parse --short HEAD) is pushed" >&2
+    fi
+    git -C "$root" push --force "$host:$remote_dir" "HEAD:refs/heads/$branch"
 }
 
 pull() {
