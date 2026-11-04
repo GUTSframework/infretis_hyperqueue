@@ -3,6 +3,7 @@ squeue record their calls, and a counting workload (chain_workload.py)
 stands in for infretis. Links run as real processes, as in a job."""
 
 import dataclasses
+import functools
 import json
 import os
 import shutil
@@ -45,7 +46,7 @@ SITE = """\
 [slurm]
 partition = "testq"
 cores_per_node = 2
-max_walltime_day = "00:15:00"
+max_walltime = "00:15:00"
 """
 # Exports a variable and writes to stdout, as `module load` may.
 SETUP = """
@@ -529,8 +530,9 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
         'site = "test"\nlinks = 7\ncores_per_task = 2\nnodes = 3\ntime_request = "30m"\n')
     with pytest.raises(ChainError, match="cores_per_task is 3, but a node of test has 2 cores"):
         cli.make_spec(rundir, {"cores_per_task": 3}, root=project.root)
-    spec = cli.make_spec(rundir, {"links": 5, "name": None}, root=project.root)
+    spec, source = cli.make_spec(rundir, {"links": 5, "name": None}, root=project.root)
     assert (spec.links, spec.name, spec.time) == (5, "run", "0:14:00")  # just under 15 min
+    assert source == "just under max_walltime 00:15:00 in sites/test.toml"
     assert spec.nodes == 3
     assert spec.args == {"cores_per_task": 2, "time_request": "30m"}
     assert spec.workload == "gutsrun_infretis.chain:InfretisRun"
@@ -539,6 +541,15 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
     assert lines[0] == "checks passed: run on test, not started (no restart.toml)"
     assert lines[-1].startswith("would submit link 1 of 5: sbatch --parsable")
     assert not spec.dir.exists() and project.calls("sbatch") == []  # nothing written
+
+    (rundir / "gutsrun.toml").write_text('site = "test"\ntime = "00:20:00"\n')
+    assert cli.make_spec(rundir, {}, root=project.root)[1] == "from gutsrun.toml"
+    spec, source = cli.make_spec(rundir, {"time": "00:30:00"}, root=project.root)
+    assert (spec.time, source) == ("00:30:00", "from --time")
+    monkeypatch.setattr(cli, "make_spec", functools.partial(cli.make_spec, root=project.root))
+    cli.main(["submit", "--check", str(rundir)])
+    assert capsys.readouterr().out.startswith(
+        "walltime per link: 00:20:00 (from gutsrun.toml)\n")
 
 
 def test_status_exit_code_says_whether_the_chain_is_active(project, monkeypatch, capsys):

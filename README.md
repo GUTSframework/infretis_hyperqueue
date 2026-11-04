@@ -90,7 +90,7 @@ Instead of options, a run directory can hold its settings in
 ```toml
 site = "das6"
 links = 20             # a cap on the whole chain (default 10)
-time = "00:14:00"      # walltime per link (default: just under the site's daytime limit)
+time = "00:14:00"      # walltime per link (default: just under the site's max_walltime)
 margin = 90            # seconds before the walltime that SIGTERM comes (default 90)
 cores_per_task = 1     # cores per infretis move, i.e. per MD engine call (default 1)
 nodes = 1              # nodes per link, each with an HQ worker on all its cores (default 1)
@@ -99,6 +99,8 @@ name = "water-run-3"   # label in the Slurm job names (default: the directory's 
 ```
 
 The simulation itself (steps, workers, engines) stays in `infretis.toml`.
+`submit` and `submit --check` first print the walltime per link and where
+it came from: `--time`, `gutsrun.toml`, or the site's `max_walltime`.
 More nodes only help if infretis has more `workers` than one node's cores
 hold (`workers` × `cores_per_task` > the site's `cores_per_node`).
 `time_request` keeps HQ from starting a move that its link would cut off
@@ -148,8 +150,8 @@ differ between clusters:
 
 - **Policy limits.** Some clusters limit the walltime by policy rather
   than in Slurm, e.g. DAS-6's 15 minutes during the day.
-  `max_walltime_day` holds such a limit; a chain without its own `time`
-  then gets just under it. Nothing stops a longer `time`: keeping to the
+  `max_walltime` holds such a limit; a chain without its own `time`
+  then gets just under it, and without either `submit` asks for `time`. Nothing stops a longer `time`: keeping to the
   policy is up to you. Where Slurm itself enforces the limits, leave it
   out.
 - **How the MD engine is loaded.** Usually a site module, whose name

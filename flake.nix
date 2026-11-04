@@ -1,7 +1,6 @@
 {
   description = "infretis on HPC via HyperQueue (GUTS Fast Track)";
 
-  # Same nixpkgs revision as ../hyperqueue_test (flake.lock copied from there).
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs = { self, nixpkgs }:

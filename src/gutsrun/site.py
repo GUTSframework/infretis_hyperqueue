@@ -19,7 +19,7 @@ class Site:
     environment variable GUTSRUN_CORES overrides `cores_per_node`, for tests
     and for trying a link on a machine without Slurm."""
 
-    KEYS = {"slurm": {"partition", "cores_per_node", "max_walltime_day"},
+    KEYS = {"slurm": {"partition", "cores_per_node", "max_walltime"},
             "environment": {"setup"}}
 
     def __init__(self, root: str | Path, name: str) -> None:
@@ -37,7 +37,7 @@ class Site:
         slurm = data.get("slurm", {})
         self.partition: str = slurm["partition"]
         self.cores: int = int(os.environ.get("GUTSRUN_CORES") or slurm["cores_per_node"])
-        self.max_walltime_day: str | None = slurm.get("max_walltime_day")
+        self.max_walltime: str | None = slurm.get("max_walltime")
         self.setup: str | None = data.get("environment", {}).get("setup")
 
 

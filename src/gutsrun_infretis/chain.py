@@ -56,7 +56,7 @@ CONFIG = {
     "site": (str, "sites/<site>.toml in the gutsrun checkout"),
     "name": (str, "label for the Slurm job names (default: the directory's name)"),
     "time": (str, "walltime per link, e.g. 00:14:00 (default: just under the site's "
-                  "max_walltime_day)"),
+                  "max_walltime)"),
     "links": (int, "most links, a cap on the whole chain (default: 10)"),
     "margin": (int, "seconds before the walltime that SIGTERM is asked for (default: 90)"),
     "cores_per_task": (int, "cores per infretis move, i.e. per MD engine call (default: 1)"),
@@ -115,13 +115,16 @@ def read_config(rundir: Path) -> dict[str, Any]:
     return config
 
 
-def make_spec(rundir: Path, options: dict[str, Any], root: str | Path = ROOT) -> Spec:
+def make_spec(rundir: Path, options: dict[str, Any],
+              root: str | Path = ROOT) -> tuple[Spec, str]:
     """The chain for `rundir`, from gutsrun.toml's settings overridden by
-    `options` (those not None). `root`: the gutsrun checkout."""
+    `options` (those not None), and where its walltime came from, for the
+    user. `root`: the gutsrun checkout."""
     rundir = rundir.resolve()
     if not (rundir / "infretis.toml").exists():
         raise ChainError(f"no infretis.toml in {rundir}")
-    config = read_config(rundir) | {k: v for k, v in options.items() if v is not None}
+    options = {k: v for k, v in options.items() if v is not None}
+    config = read_config(rundir) | options
     if "site" not in config:
         raise ChainError("no site: set `site` in gutsrun.toml or pass --site")
     spec = Spec(rundir=str(rundir), site=config["site"],
@@ -137,14 +140,17 @@ def make_spec(rundir: Path, options: dict[str, Any], root: str | Path = ROOT) ->
         raise ChainError(f"cores_per_task is {spec.args['cores_per_task']}, but a node of "
                          f"{spec.site} has {site.cores} cores (cores_per_node); no move "
                          "would ever start")
-    if "time" in config:
-        spec.time = config["time"]
+    if "time" in options:
+        spec.time, source = options["time"], "from --time"
+    elif "time" in config:
+        spec.time, source = config["time"], "from gutsrun.toml"
     else:
-        limit = site.max_walltime_day
+        limit = site.max_walltime
         if limit is None:
             raise ChainError("no time: set `time` in gutsrun.toml or pass --time")
         spec.time = walltime(seconds(limit) - 60)
-    return spec
+        source = f"just under max_walltime {limit} in sites/{spec.site}.toml"
+    return spec, source
 
 
 def describe(spec: Spec) -> list[str]:
@@ -190,7 +196,8 @@ def main(argv: list[str] | None = None) -> None:
     setup_logging()
     try:
         if args.command == "submit":
-            spec = make_spec(args.rundir, {key: getattr(args, key) for key in CONFIG})
+            spec, source = make_spec(args.rundir, {key: getattr(args, key) for key in CONFIG})
+            print(f"walltime per link: {spec.time} ({source})")
             if args.check:
                 print(*describe(spec), sep="\n")
             else:

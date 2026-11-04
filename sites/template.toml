@@ -20,7 +20,7 @@ cores_per_node = 24
 # its own `time` gets just under it. Nothing enforces it: a longer `time`
 # is the user's call (e.g. at night). Leave it out where Slurm itself
 # enforces the partition's limits (sbatch then refuses longer jobs).
-# max_walltime_day = "00:15:00"
+# max_walltime = "00:15:00"
 
 [environment]
 # Shell lines each link runs in bash before it starts anything, to make the
