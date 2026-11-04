@@ -5,16 +5,16 @@ What this repo takes as given. If one turns out wrong, update this file
 
 ## Version pins
 
-| What | Pin | Why |
-|---|---|---|
-| infretis | GUTS fork, branch `guts`, git `bf813ee`: upstream `a42e039` (main, 2026-05-26; reports version 2026.1.1) plus eleven changes meant for upstream | PyPI 2026.1.1 and `main` differ in move physics; infentory installs from `main` (the code and the measurements name one version). The changes: restarts from the run's seed, atomic `restart.toml`, no busy spin, an import-order bug, seeded ASE velocities, the `executor_factory` hook, workers that stop their MD program on SIGTERM, worker logs by pin without shared state, a graceful stop on SIGTERM/SIGINT, GROMACS's shared inputs written once at setup, and a finished run refused before setup changes it |
-| inftools | git `ca33eae` (main, 2026-09-25) | `infinit`, WHAM analysis |
-| Python | 3.12 | infretis pins numpy < 2; numpy 1.26.4 has no 3.13 wheel |
-| numpy | 1.26.4 | from infretis (`^1.21.2`) |
-| HQ | 0.26.2, binary only (driven through its CLI) | measured in `../hyperqueue_test`; the event format of `hq journal stream` is HQ's own. Before moving to 0.27.x, rerun the 1024-task autoalloc regression check |
-| nixpkgs | `151fa4e` (same lock as `../hyperqueue_test`) | |
-| GROMACS | 2026.3 (nixpkgs; conda-forge on DAS-6) | production clusters use their own module |
-| LAMMPS | 22Jul2025_update4 (nixpkgs), 29Aug2024 (conda-forge on DAS-6), REAXFF + QEQ enabled | water_dissociation; on DAS-6 the newest conda-forge build whose `lmp` runs there (below) |
+| What | Pin | Used for | Why this version |
+|---|---|---|---|
+| infretis | GUTS fork, branch `guts`, git `bf813ee`: upstream `a42e039` (main, 2026-05-26; reports version 2026.1.1) plus eleven changes meant for upstream | the simulation | PyPI 2026.1.1 and `main` differ in move physics; infentory installs from `main` (the code and the measurements name one version). The changes: restarts from the run's seed, atomic `restart.toml`, no busy spin, an import-order bug, seeded ASE velocities, the `executor_factory` hook, workers that stop their MD program on SIGTERM, worker logs by pin without shared state, a graceful stop on SIGTERM/SIGINT, GROMACS's shared inputs written once at setup, and a finished run refused before setup changes it |
+| inftools | git `ca33eae` (main, 2026-09-25) | `inft infinit` makes initial paths (`puckering`); `inft wham` is the usual analysis of a run | `main` at the time; nothing newer needed |
+| Python | 3.12 | everything | numpy 1.26.4 has no wheels for 3.13 |
+| numpy | 1.26.4 | infretis | infretis pins numpy below 2 (`^1.21.2`) |
+| HQ | 0.26.2, binary only (driven through its CLI) | tasks, workers, completion events | measured in `../hyperqueue_test`; open jobs and `hq journal` need 0.21 or later. Before moving to 0.27.x, rerun the 1024-task autoalloc regression check, and check the event format of `hq journal stream`, which is HQ's own |
+| nixpkgs | `151fa4e` (`flake.lock`) | the dev shell: Python, GROMACS, LAMMPS, ruff, pyright, jq | none in particular; the lock keeps the dev shell reproducible. Updating it changes the GROMACS and LAMMPS versions below |
+| GROMACS | 2026.3 (nixpkgs; conda-forge on DAS-6) | `water_boiling`, `puckering` | nixpkgs' version, matched on DAS-6; production clusters use their own module |
+| LAMMPS | 22Jul2025_update4 (nixpkgs), 29Aug2024 (conda-forge on DAS-6), REAXFF + QEQ enabled | `water_dissociation` (needs REAXFF and QEQ) | on DAS-6 the newest conda-forge build whose `lmp` runs there (below) |
 
 Exact Python package versions: `requirements-lock.txt`.
 
