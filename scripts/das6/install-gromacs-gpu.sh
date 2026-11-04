@@ -38,8 +38,10 @@ section "gmx on fs0 (no GPU)"
 "$gmx" --version 2>&1 | grep -E '^GROMACS version|^SIMD instructions|^GPU support'
 
 section "gmx on a GPU node"
-srun -p defq -N1 -t 2 --exclusive bash -c "
+# libcuda as sites/das6.toml finds it; without it gmx reports CUDA driver 0.0.
+srun -p defq -N1 -t 2 --exclusive -- bash -c "
 hostname
 cat /proc/driver/nvidia/version
+export LD_LIBRARY_PATH=/cm/local/apps/cuda-driver/libs/current/lib64
 '$gmx' --version 2>&1 | grep -E '^GROMACS version|^GPU support|^CUDA (driver|runtime)'
 "

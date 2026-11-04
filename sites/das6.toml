@@ -14,5 +14,10 @@ max_walltime = "00:15:00"
 [environment]
 # DAS-6 provides no MD engines; scripts/das6/install-engines.sh installs
 # conda-forge GROMACS and LAMMPS in /var/scratch. Only their gmx and lmp
-# are put on PATH, not the conda env's python3.
-setup = 'export PATH="/var/scratch/$USER/miniforge3/md-bin:$PATH"'
+# are put on PATH, not the conda env's python3. The CUDA build
+# (install-gromacs-gpu.sh) needs libcuda, which the GPU nodes keep outside
+# the linker's search path, in the directory of the driver they run.
+setup = '''
+export PATH="/var/scratch/$USER/miniforge3/md-bin:$PATH"
+export LD_LIBRARY_PATH="/cm/local/apps/cuda-driver/libs/current/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+'''

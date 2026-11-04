@@ -83,7 +83,11 @@ its admins.
   worker detects them; with `--gres=gpu:N`, Slurm also sets
   `ROCR_VISIBLE_DEVICES`, and HQ then reports AMD GPUs that are not there
   (harmless: moves ask for `gpus/nvidia`). `nvidia-smi` is not on `PATH`
-  on the nodes.
+  on the nodes, and `libcuda.so.1` is not in the linker cache: it is in
+  `/cm/local/apps/cuda-driver/libs/current/lib64` (driver 595.91.07, CUDA
+  13.2), which the `cuda*/toolkit` modules also put on `LD_LIBRARY_PATH`.
+  `scripts/das6/install-gromacs-gpu.sh` installs conda-forge's CUDA
+  GROMACS 2026.3 (CUDA runtime 12.9), which runs with it.
 
 ## Snellius (first target)
 
