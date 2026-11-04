@@ -23,7 +23,8 @@ The fork does not fix this yet; [QUICKSTART.md](QUICKSTART.md) says what
 it means for a run.
 
 Part of the GUTS Fast Track. For how it is built, tested and measured, see
-[DEVELOPMENT.md](DEVELOPMENT.md).
+[DEVELOPMENT.md](DEVELOPMENT.md). Terms such as link, move and HQ task:
+[GLOSSARY.md](GLOSSARY.md).
 
 ## How a run goes
 
@@ -52,9 +53,18 @@ step by step, on DAS-6 with LAMMPS.
 Once per cluster, on its login node, in a copy of this repository:
 
 ```bash
-scripts/setup-venv.sh       # .venv with infretis (the fork) and gutsrun-infretis (see the script for clusters)
+scripts/setup-venv.sh       # .venv with infretis (the fork); bin/gutsrun-infretis (see the script for clusters)
 scripts/get-hq.sh           # the hq binary, into bin/
 ```
+
+Then put the checkout's `bin/` on your `PATH`, e.g. in `~/.bashrc`:
+
+```bash
+export PATH=~/infretis_hyperqueue/bin:$PATH
+```
+
+It holds only `gutsrun-infretis` and `hq`, so the venv's own `python`
+stays out of your way.
 
 The cluster needs a site file, `sites/<site>.toml` (DAS-6: `das6`; see
 [Adding a cluster](#adding-a-cluster)).
@@ -64,8 +74,8 @@ share:
 
 ```bash
 cd /path/to/my-run
-~/infretis_hyperqueue/.venv/bin/gutsrun-infretis submit --site das6 --links 20
-gutsrun-infretis submit --check    # the checks only: shows the sbatch command, submits nothing
+gutsrun-infretis submit --check --site das6 --links 20   # the checks only: shows the sbatch command, submits nothing
+gutsrun-infretis submit --site das6 --links 20
 gutsrun-infretis status            # where the run is, and each link's job
 gutsrun-infretis status --follow   # again whenever it changes, until the end
 gutsrun-infretis stop              # stop the chain; restart.toml stays valid
@@ -75,10 +85,9 @@ A `stop` within about a second of a link starting can show that link as
 "failed (exit -15)": infretis was still loading and had written nothing, so
 the run continues normally with the next `submit`.
 
-(The examples call it by its path once; with `.venv/bin` on your `PATH`,
-`gutsrun-infretis` is enough.) `status` exits with 0 once none of the
-chain's jobs is queued or running, and 10 while some are, for scripts;
-`status --json` prints the report as JSON for them (keys in `--help`).
+For scripts: `status` exits with 0 when the chain is over (none of its
+jobs is queued or running) and with 10 while it is still active.
+`status --json` prints the same report as JSON; `--help` lists its keys.
 From another machine, `scripts/wait-jobs.sh <host> --run <rundir>` waits
 over ssh until the chain is over.
 

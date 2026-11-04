@@ -1,7 +1,7 @@
 # Development
 
 How this repository is built, tested and measured. For using it, see
-[README.md](README.md).
+[README.md](README.md); for the terms, [GLOSSARY.md](GLOSSARY.md).
 
 ## Background
 
@@ -153,13 +153,14 @@ pyproject.toml          the gutsrun package (src/), the gutsrun-infretis command
 requirements.txt        direct pins (infretis, inftools)
 requirements-lock.txt   exact versions, installed by setup-venv.sh
 scripts/get-hq.sh       pinned hq binary into ./bin, for clusters without Nix
-scripts/setup-venv.sh   .venv from the lock file, plus this checkout (editable)
+scripts/setup-venv.sh   .venv from the lock file, plus this checkout (editable); bin/gutsrun-infretis
 scripts/sync.sh         rsync the repo to a login node, pull runs/<site>/ back
 scripts/wait-jobs.sh    poll a login node's squeue until jobs finish, optionally pull
 scripts/das6/           probe-login.sh (what the login node has, read-only);
                         install-engines.sh (GROMACS, LAMMPS from conda-forge)
 sites/                  one file per cluster; template.toml documents every key
 ASSUMPTIONS.md          version pins and cluster assumptions
+GLOSSARY.md             the terms: chain, link, move, HQ job and task, ...
 PROVENANCE.md           where each file comes from, and under which terms
 bench/bare_run.py       run bare infretis on an example, record run.json
 bench/chain.py          chains of an example with either runner (the bare-vs-gutsrun rows)

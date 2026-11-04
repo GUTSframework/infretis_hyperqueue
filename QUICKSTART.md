@@ -7,7 +7,7 @@ about half an hour, mostly the engine install. The test run takes three
 daytime links of 14 minutes, plus queue time.
 
 What `gutsrun-infretis` does, and every setting, is in the
-[README](README.md).
+[README](README.md); the terms it uses are in [GLOSSARY.md](GLOSSARY.md).
 
 > **Restarts with more than one worker are not exact yet.** Every link
 > after the first restarts infretis from `restart.toml`. With
@@ -50,13 +50,18 @@ cd ~/infretis_hyperqueue
 PYTHON=/usr/bin/python3.12 PIP_ONLY_BINARY=:all: PIP_NO_CACHE_DIR=1 bash scripts/setup-venv.sh
 scripts/get-hq.sh
 bash scripts/das6/install-engines.sh
+echo 'export PATH=~/infretis_hyperqueue/bin:$PATH' >> ~/.bashrc
+source ~/.bashrc
 ```
 
 - `setup-venv.sh` builds `.venv` with infretis (the GUTS fork) and
-  `gutsrun-infretis`. It ends with `ok: …/infretis/__init__.py`.
+  `gutsrun-infretis`, and links the command into `bin/`. It ends with
+  `ok: …/infretis/__init__.py`.
   (fs0's default `python3` is 3.6, hence `PYTHON`.)
 - `get-hq.sh` puts the HyperQueue binary in `bin/hq` and prints its
   version.
+- The `PATH` line makes `gutsrun-infretis` and `hq` available in every
+  new shell; `bin/` holds only these two, not the venv's `python`.
 - `install-engines.sh` installs conda-forge GROMACS and LAMMPS into
   `/var/scratch/$USER/miniforge3`, about 1.2 GB, since DAS-6 provides no
   MD engines. `sites/das6.toml` puts their `gmx` and `lmp` on `PATH` in
@@ -93,19 +98,13 @@ in `infretis.toml`.
 ## 4. Check and submit
 
 ```bash
-~/infretis_hyperqueue/.venv/bin/gutsrun-infretis submit --check
-~/infretis_hyperqueue/.venv/bin/gutsrun-infretis submit
+gutsrun-infretis submit --check
+gutsrun-infretis submit
 ```
 
 `--check` runs the checks and shows the `sbatch` command without
 submitting anything. `submit` queues link 1. Each link queues the next one
 before it starts its own work.
-
-To save typing, put the venv on your `PATH`:
-
-```bash
-export PATH=~/infretis_hyperqueue/.venv/bin:$PATH
-```
 
 ## 5. Follow the run
 
