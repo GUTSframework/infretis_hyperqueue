@@ -284,7 +284,7 @@ def test_a_new_chain_waits_for_the_last_to_leave_the_queue(project, monkeypatch)
 # --- links --------------------------------------------------------------------------
 
 
-def test_done_cancels_the_pre_submitted_link(project):
+def test_done_cancels_the_pre_submitted_link(project, monkeypatch):
     spec = project.spec(links=3)
     rc, out = project.link(spec, 1)
     assert rc == 0, out
@@ -296,6 +296,10 @@ def test_done_cancels_the_pre_submitted_link(project):
     ended = [e for e in events(spec) if e["event"] == "ended"]
     assert [(e["link"], e["result"], e["progress"]) for e in ended] == [
         (1, "done", "step 5 of 5")]
+    project.use_fakes(monkeypatch, squeue="")
+    report = status(spec)
+    assert report.links[1].endswith("job 1001       cancelled: the run was done")
+    assert report.over == "the run is done"
 
 
 def test_sigterm_stops_and_the_next_link_continues(project):

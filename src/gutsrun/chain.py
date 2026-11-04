@@ -420,16 +420,21 @@ def status(spec: Spec) -> Report:
     queued = queue()
     links = [] if queued is not None else ["(squeue does not answer)"]
     active = queued is None
+    previous: str | None = None  # the result the link before recorded
     for link, job in chain_jobs(spec):
         head = f"link {link:>2}  job {job:<10}"
+        result = ended[(link, job)]["result"] if (link, job) in ended else None
         if queued and job in queued:
             active = True
             links.append(f"{head} {queued[job]}")
-        elif (link, job) in ended:
+        elif result is not None:
             e = ended[(link, job)]
-            links.append(f"{head} ended {e['time']}: {e['result']}, {e['progress']}")
+            links.append(f"{head} ended {e['time']}: {result}, {e['progress']}")
+        elif previous is not None and previous.startswith("done"):
+            links.append(f"{head} cancelled: the run was done")  # by the link before
         else:
             links.append(f"{head} not in the queue, no end recorded")
+        previous = result
     over = why_over(spec, record) if not active and record else None
     return Report(progress, links, over, active)
 
