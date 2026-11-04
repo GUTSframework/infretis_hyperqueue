@@ -63,6 +63,17 @@ def test_resources_cwd_env_threads(make_executor, tmp_path):
     assert ex.submit(helpers.env, "GUTSRUN_TEST", resource_dict=rd).result(timeout=60) == "yes"
 
 
+def test_a_task_with_gpus_gets_its_gpu(make_executor, hq_cluster):
+    """HQ gives a task with `gpus` one of the worker's NVIDIA GPUs and points
+    CUDA_VISIBLE_DEVICES at it. The worker here declares a stand-in GPU 7."""
+    hq_cluster.workers[0].terminate()
+    hq_cluster.workers[0].wait()
+    hq_cluster.add_worker("--resource", "gpus/nvidia=[7]")
+    ex = make_executor()
+    fut = ex.submit(helpers.env, "CUDA_VISIBLE_DEVICES", resource_dict={"gpus": 1})
+    assert fut.result(timeout=60) == "7"
+
+
 def test_task_environment_does_not_grow(make_executor):
     """Each task gets gutsrun's src on PYTHONPATH, without adding it to the
     executor's defaults: grown once per task, it would pass Linux's 128 KiB

@@ -143,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
                         "a server of the launcher's own)")
     p.add_argument("--spool", default="gutsrun-spool")
     p.add_argument("--cores-per-task", type=int, default=1)
+    p.add_argument("--gpus-per-task", type=int, default=0)
     p.add_argument("--time-request", help="start a move only on a worker with this "
                                           "much time left, e.g. 30m (default: off)")
     args = p.parse_args(argv)
@@ -161,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     def make_backend() -> Backend:
         return hq.HQBackend(server_dir, time_request=args.time_request, hq_bin=hq_bin)
 
-    resources = {"cores": args.cores_per_task, "cwd": os.getcwd()}
+    resources = {"cores": args.cores_per_task, "gpus": args.gpus_per_task, "cwd": os.getcwd()}
     factory = make_factory(make_backend, args.spool, resources)
 
     own_hq = contextlib.ExitStack()

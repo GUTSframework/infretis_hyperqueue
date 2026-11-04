@@ -512,6 +512,8 @@ def test_infretis_progress_and_argv(tmp_path):
     assert run.argv("py", tmp_path, 1)[4] == "restart.toml"
     assert InfretisRun(time_request="30m").argv("py", tmp_path, 1)[-2:] == [
         "--time-request", "30m"]
+    assert InfretisRun(gpus_per_task=1).argv("py", tmp_path, 1)[-2:] == [
+        "--gpus-per-task", "1"]
     (tmp_path / "restart.toml").write_text("[current]\ncstep = ")
     with pytest.raises(StateError, match="does not parse"):
         run.progress(tmp_path)
@@ -531,14 +533,15 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
     with pytest.raises(ChainError, match="unknown key 'walltime'"):
         cli.make_spec(rundir, {}, root=project.root)
     (rundir / "gutsrun.toml").write_text(
-        'site = "test"\nlinks = 7\ncores_per_task = 2\nnodes = 3\ntime_request = "30m"\n')
+        'site = "test"\nlinks = 7\ncores_per_task = 2\nnodes = 3\ntime_request = "30m"\n'
+        'gpus_per_task = 1\n')
     with pytest.raises(ChainError, match="cores_per_task is 3, but a node of test has 2 cores"):
         cli.make_spec(rundir, {"cores_per_task": 3}, root=project.root)
     spec, source = cli.make_spec(rundir, {"links": 5, "name": None}, root=project.root)
     assert (spec.links, spec.name, spec.time) == (5, "run", "0:14:00")  # just under 15 min
     assert source == "just under max_walltime 00:15:00 in sites/test.toml"
     assert spec.nodes == 3
-    assert spec.args == {"cores_per_task": 2, "time_request": "30m"}
+    assert spec.args == {"cores_per_task": 2, "gpus_per_task": 1, "time_request": "30m"}
     assert spec.workload == "gutsrun_infretis.chain:InfretisRun"
 
     lines = cli.describe(spec)
