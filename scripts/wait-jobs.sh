@@ -14,7 +14,7 @@
 #   <rundir> (relative to $REMOTE_DIR, default infretis_hyperqueue, or
 #   absolute), until none of the chain's jobs is queued or running. A chain
 #   submits new jobs as it goes, so its job ids are not known in advance.
-#   Needs jq (in `nix develop`).
+#   Needs jq.
 #
 # With --pull it then runs `scripts/sync.sh <host> pull`. Gives up after
 # $MAX_WAIT s (default 1800; 43200 with --run) or 5 failed ssh calls in a
@@ -38,7 +38,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 
 # -q hides ssh's own warnings; the remote $USER is expanded on the remote side.
 if [ -n "$rundir" ]; then
-    command -v jq >/dev/null || { echo "wait-jobs.sh --run needs jq (nix develop)" >&2; exit 1; }
+    command -v jq >/dev/null || { echo "wait-jobs.sh --run needs jq" >&2; exit 1; }
     max_wait="${MAX_WAIT:-43200}"
     # gutsrun-infretis status exits 0 once no job of the chain is left, 10 while
     # some are (or squeue does not answer).

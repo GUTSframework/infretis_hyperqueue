@@ -357,6 +357,10 @@ The rest of what the dev shell provides, and what needs it:
 | lint and type check | `.venv/bin/python -m pip install ruff pyright`. Not pinned, so versions may differ from the dev shell's; the PyPI `pyright` downloads Node.js on first use |
 | `scripts/wait-jobs.sh --run` | `jq` |
 
+`scripts/sync.sh` and `scripts/wait-jobs.sh` also need `rsync` and `ssh`
+on the laptop, which the dev shell does not provide: they come from the
+system, with or without Nix.
+
 On NixOS without the dev shell, pip's wheels (numpy, mdtraj) do not find
 `libstdc++` and `zlib`: use `nix develop`.
 

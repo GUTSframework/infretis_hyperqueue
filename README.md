@@ -50,7 +50,9 @@ one, so a broken run does not burn through its links.
 New to this? [QUICKSTART.md](QUICKSTART.md) walks through a first run
 step by step, on DAS-6 with LAMMPS.
 
-Once per cluster, on its login node, in a copy of this repository:
+Once per cluster, on its login node, in a copy of this repository. It
+needs Python 3.12 (set `PYTHON` if it is not called `python3.12`), git,
+curl, sha256sum and tar:
 
 ```bash
 scripts/setup-venv.sh       # .venv with infretis (the fork); bin/gutsrun-infretis (see the script for clusters)
@@ -88,8 +90,10 @@ the run continues normally with the next `submit`.
 For scripts: `status` exits with 0 when the chain is over (none of its
 jobs is queued or running) and with 10 while it is still active.
 `status --json` prints the same report as JSON; `--help` lists its keys.
-From another machine, `scripts/wait-jobs.sh <host> --run <rundir>` waits
-over ssh until the chain is over.
+From another machine, e.g. your laptop, `scripts/wait-jobs.sh <host> --run
+<rundir>` waits over ssh until the chain is over. It needs a copy of this
+repository and `jq` there, and ssh to the login node without a password
+prompt (a key or an agent).
 
 ## Settings
 
