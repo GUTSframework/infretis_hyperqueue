@@ -57,7 +57,7 @@ from gutsrun import TaskExecutor, hq
 from gutsrun.chain import ROOT
 from gutsrun.executor import Backend
 
-TESTED_COMMIT = "bf813ee"  # the fork's commit in requirements.txt
+TESTED_COMMIT = "2502487"  # the fork's commit in requirements.txt
 EXIT_DONE, EXIT_STOPPED, EXIT_REFUSED = 0, 3, 4
 
 log = logging.getLogger("gutsrun_infretis")

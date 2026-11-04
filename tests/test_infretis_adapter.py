@@ -154,6 +154,19 @@ def test_second_sigterm_while_stopping(tmp_path, gap):
     assert "stopped by SIGTERM; moves not yet saved are redone" in out
 
 
+def test_stop_prints_no_traceback_for_the_moves_in_flight(tmp_path):
+    """The moves cancelled at a stop are redone; their failures reach no
+    future, so asyncio logs no "Future exception was never retrieved"."""
+    rd = tmp_path / "run"
+    prepare("2d_potential", rd, workers=2, steps=100000)
+    proc = launch(rd, "-i", "infretis.toml")
+    wait_for(lambda: (rd / "restart.toml").exists(), timeout=120, what="restart.toml")
+    proc.send_signal(signal.SIGTERM)
+    out, _ = proc.communicate(timeout=120)
+    assert proc.returncode == EXIT_STOPPED, out
+    assert "never retrieved" not in out and "Traceback" not in out, out
+
+
 def test_stop_before_the_first_move_leaves_restart_toml_alone(tmp_path):
     """A resumed link stopped while it starts up (`stop` right after a link
     starts): infretis writes restart.toml only at the end of treat_output,

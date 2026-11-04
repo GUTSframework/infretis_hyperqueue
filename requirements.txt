@@ -1,5 +1,5 @@
 # Pinned for all runs (ASSUMPTIONS.md). Install with scripts/setup-venv.sh.
-infretis @ git+https://github.com/GUTSframework/infretis@bf813ee355bd91f4c78f8303a8f627f0e0808d2e
+infretis @ git+https://github.com/GUTSframework/infretis@250248728c2804263b82115999ff2acd00949179
 inftools @ git+https://github.com/infretis/inftools@ca33eae4258213f0cf526881918a643b8c5cc2ff
 # Order parameters: water_boiling (mdtraj), water_dissociation (MDAnalysis).
 mdtraj
