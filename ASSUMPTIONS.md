@@ -76,8 +76,14 @@ its admins.
   limit (`quota` shows 0). conda-forge's `gmx` picks AVX2_256 on AMD
   EPYC; production clusters use their own optimised builds, so DAS-6
   move times show plumbing, not production speed.
-- Every `defq` node has at least one GPU (A2 to A100, per `sinfo`); GPU
-  jobs are untested.
+- Every `defq` node has 1 to 4 NVIDIA GPUs of one type (A2, A4000, A5000,
+  A6000 or A100), named as a node feature, so `constraint = "A4000"` in
+  `gutsrun.toml` picks a type (`sinfo -p defq -N -o "%N %G %f"`). With
+  `--exclusive`, a job sees the node's GPUs without `--gres`, and the HQ
+  worker detects them; with `--gres=gpu:N`, Slurm also sets
+  `ROCR_VISIBLE_DEVICES`, and HQ then reports AMD GPUs that are not there
+  (harmless: moves ask for `gpus/nvidia`). `nvidia-smi` is not on `PATH`
+  on the nodes.
 
 ## Snellius (first target)
 

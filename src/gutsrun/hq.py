@@ -52,6 +52,22 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def worker_gpus(server_dir: str | Path, hq_bin: str | None = None,
+                gpu_resource: str = "gpus/nvidia") -> list[int]:
+    """How many GPUs (`gpu_resource`) each connected worker of the server
+    has. HQ detects a node's NVIDIA GPUs when the worker starts."""
+    hq = hq_bin or shutil.which("hq")
+    if hq is None:
+        raise HQError("no hq on PATH")
+    done = subprocess.run([hq, "--server-dir", str(server_dir), "--output-mode", "json",
+                           "worker", "list"], capture_output=True, text=True)
+    if done.returncode != 0:
+        raise HQError(f"hq worker list: {done.stderr.strip()}")
+    return [sum(len(r.get("values", [])) for r in w["configuration"]["resources"]["resources"]
+                if r["name"] == gpu_resource)
+            for w in json.loads(done.stdout)]
+
+
 @contextlib.contextmanager
 def server_and_worker(root: str | Path, server: Path, log_prefix: str, cores: int,
                       env: dict[str, str] | None = None) -> Iterator[str]:

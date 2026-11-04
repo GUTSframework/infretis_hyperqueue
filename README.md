@@ -108,6 +108,7 @@ margin = 90            # seconds before the walltime that SIGTERM comes (default
 cores_per_task = 1     # cores per infretis move, i.e. per MD engine call (default 1)
 gpus_per_task = 0      # GPUs per infretis move (default 0)
 nodes = 1              # nodes per link, each with an HQ worker on all its cores (default 1)
+constraint = "A4000"   # node features the links need, e.g. a GPU type (default: none)
 time_request = "30m"   # start a move only if its link has this much time left (default: off)
 name = "water-run-3"   # label in the Slurm job names (default: the directory's name)
 ```

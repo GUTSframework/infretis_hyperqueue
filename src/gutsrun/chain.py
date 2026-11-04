@@ -137,6 +137,7 @@ class Spec:
     margin: int = 90  # seconds before the walltime that SIGTERM is asked for
     links: int = 10  # most links in the chain
     nodes: int = 1  # per link; nodes after the first only run HQ workers
+    constraint: str | None = None  # Slurm node features the link needs, e.g. "A4000"
     root: str = str(ROOT)  # project checkout: sites/, .venv, bin/
 
     @property
@@ -281,6 +282,8 @@ def sbatch_argv(spec: Spec, site: Site, link: int, after: str | None = None) -> 
             f"--partition={site.partition}", f"--nodes={spec.nodes}", f"--time={spec.time}",
             f"--signal=B:TERM@{spec.margin}", f"--chdir={spec.rundir}",
             f"--output={spec.dir / f'link{link}-%j.out'}", "--exclusive"]
+    if spec.constraint:
+        argv.append(f"--constraint={spec.constraint}")
     if after:
         argv.append(f"--dependency=afterany:{after}")
     return [*argv, f"--wrap={command}"]

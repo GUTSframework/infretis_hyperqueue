@@ -27,6 +27,9 @@ only:
 - `--time-request` (e.g. 30m) keeps a worker from starting a
   move unless it has that much time left. Off by default; set it to about
   the longest move plus the chain's SIGTERM margin.
+- `--gpus-per-task` gives each move that many of a worker's NVIDIA GPUs
+  (HQ sets CUDA_VISIBLE_DEVICES). The launcher exits if no worker with
+  that many connects within a minute: no move would ever start.
 - Once infretis's scheduler has returned, stop signals are ignored, so a
   second one cannot cut the shutdown short (exit -15, which a chain reads
   as a failure). A signal before the scheduler runs ends the launcher the
@@ -45,6 +48,7 @@ import os
 import re
 import signal
 import sys
+import time
 from collections.abc import Callable
 from importlib.metadata import distribution
 from pathlib import Path
@@ -112,6 +116,22 @@ def check_infretis() -> None:
                  "because the version number is the same: add --force-reinstall.")
 
 
+def check_gpus(server_dir: str, hq_bin: str | None, gpus: int, wait: float = 60) -> None:
+    """Exit unless an HQ worker with at least `gpus` GPUs connects within
+    `wait` seconds: HQ would hold every move, and the link would idle until
+    its walltime."""
+    deadline = time.monotonic() + wait
+    while True:
+        found = hq.worker_gpus(server_dir, hq_bin)
+        if any(n >= gpus for n in found):
+            log.info("hq workers' GPUs: %s", found)
+            return
+        if time.monotonic() > deadline:
+            sys.exit(f"--gpus-per-task is {gpus}, but no HQ worker has that many GPUs "
+                     f"(GPUs per worker: {found or 'no worker'}); no move would ever start")
+        time.sleep(1)
+
+
 PINNING = re.compile(r"(?<!\S)(-pin\s+(on|auto)|-pinoffset|-pinstride)(?!\S)")
 
 
@@ -176,6 +196,8 @@ def main(argv: list[str] | None = None) -> int:
             hq_bin = str(Path(own_hq.enter_context(hq.server_and_worker(
                 ROOT, Path(server_dir), "gutsrun", cores))) / "hq")
             log.info("own hq server in %s, worker with %d cores", server_dir, cores)
+        if args.gpus_per_task:
+            check_gpus(server_dir, hq_bin, args.gpus_per_task)
         # infretis says why it refuses on its "main" logger, which only has
         # a NullHandler until the run starts; show the reason on stderr.
         to_stderr = logging.StreamHandler()

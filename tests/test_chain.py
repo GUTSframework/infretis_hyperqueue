@@ -227,6 +227,9 @@ def test_start_submits_link_1_with_site_options(project, monkeypatch):
     assert "--dependency" not in call
     assert load_spec(project.rundir) == spec
     assert "--nodes=2" in sbatch_argv(project.make_spec(nodes=2), Site(project.root, "test"), 1)
+    gpu = project.make_spec()
+    gpu.constraint = "A4000"
+    assert "--constraint=A4000" in sbatch_argv(gpu, Site(project.root, "test"), 1)
     assert [e["event"] for e in events(spec)] == ["chain", "submitted"]
 
 
@@ -534,13 +537,13 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
         cli.make_spec(rundir, {}, root=project.root)
     (rundir / "gutsrun.toml").write_text(
         'site = "test"\nlinks = 7\ncores_per_task = 2\nnodes = 3\ntime_request = "30m"\n'
-        'gpus_per_task = 1\n')
+        'gpus_per_task = 1\nconstraint = "A4000"\n')
     with pytest.raises(ChainError, match="cores_per_task is 3, but a node of test has 2 cores"):
         cli.make_spec(rundir, {"cores_per_task": 3}, root=project.root)
     spec, source = cli.make_spec(rundir, {"links": 5, "name": None}, root=project.root)
     assert (spec.links, spec.name, spec.time) == (5, "run", "0:14:00")  # just under 15 min
     assert source == "just under max_walltime 00:15:00 in sites/test.toml"
-    assert spec.nodes == 3
+    assert (spec.nodes, spec.constraint) == (3, "A4000")
     assert spec.args == {"cores_per_task": 2, "gpus_per_task": 1, "time_request": "30m"}
     assert spec.workload == "gutsrun_infretis.chain:InfretisRun"
 

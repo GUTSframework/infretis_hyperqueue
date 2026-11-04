@@ -26,6 +26,7 @@ from gutsrun_infretis.launcher import (  # noqa: E402
     EXIT_DONE,
     EXIT_REFUSED,
     EXIT_STOPPED,
+    check_gpus,
     check_wmdrun,
 )
 
@@ -79,6 +80,16 @@ def test_check_wmdrun():
     with pytest.raises(SystemExit, match="-ntomp 2 but --cores-per-task is 4"):
         check_wmdrun(["gmx mdrun -ntomp 2 -ntmpi 1"], 4)
     check_wmdrun(["gmx_pin mdrun -ntomp 2 -deffnm x-pin"], 2)  # not flags
+
+
+def test_check_gpus(hq_cluster):
+    """Moves that ask for GPUs need a worker that has them."""
+    with pytest.raises(SystemExit, match="no HQ worker has that many GPUs .*: \\[0\\]"):
+        check_gpus(str(hq_cluster.dir), hq_cluster.hq, 1, wait=0)
+    hq_cluster.add_worker("--resource", "gpus/nvidia=[0,1]")
+    check_gpus(str(hq_cluster.dir), hq_cluster.hq, 2, wait=0)
+    with pytest.raises(SystemExit, match=r"\[0, 2\]"):
+        check_gpus(str(hq_cluster.dir), hq_cluster.hq, 3, wait=0)
 
 
 def test_infretis_from_another_commit_refused(monkeypatch):

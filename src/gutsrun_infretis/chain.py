@@ -62,6 +62,8 @@ CONFIG = {
     "cores_per_task": (int, "cores per infretis move, i.e. per MD engine call (default: 1)"),
     "gpus_per_task": (int, "GPUs per infretis move (default: 0)"),
     "nodes": (int, "nodes per link, each with an HQ worker on all its cores (default: 1)"),
+    "constraint": (str, "Slurm node features the link's nodes must have, e.g. a GPU type "
+                        "such as A4000 (sbatch --constraint; default: none)"),
     "time_request": (str, "start a move only on a worker with this much time left in its "
                           "link, e.g. 30m: about the longest move plus `margin` "
                           "(default: off)"),
@@ -138,7 +140,8 @@ def make_spec(rundir: Path, options: dict[str, Any],
                       "gpus_per_task": config.get("gpus_per_task", 0),
                       "time_request": config.get("time_request")},
                 margin=config.get("margin", 90), links=config.get("links", 10),
-                nodes=config.get("nodes", 1), root=str(root))
+                nodes=config.get("nodes", 1), constraint=config.get("constraint"),
+                root=str(root))
     site = Site(spec.root, spec.site)
     if spec.args["cores_per_task"] > site.cores:
         # HQ would hold every move: no worker has that many cores.
