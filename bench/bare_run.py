@@ -133,10 +133,11 @@ def prepare(args: argparse.Namespace) -> str:
 
 
 def git_head(path: Path) -> str | None:
-    """Short commit of the repo; None outside a git clone or without git."""
+    """The repo's commit, as the chain records it (`--dirty` if files differ
+    from it); None outside a git clone or without git."""
     try:
         return subprocess.run(
-            ["git", "-C", str(path), "rev-parse", "--short", "HEAD"],
+            ["git", "-C", str(path), "describe", "--always", "--dirty"],
             capture_output=True, text=True, check=True,
         ).stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
