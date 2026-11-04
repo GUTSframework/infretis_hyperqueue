@@ -223,8 +223,7 @@ fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})
   or gutsrun depends on the type.
 - **`--time-request`** (`HQBackend(time_request=...)`, off by default): a
   worker with less time left than that does not start the task. A worker
-  inside a Slurm job is expected to take its end time from Slurm (not
-  yet checked on DAS-6).
+  inside a Slurm job takes its end time from Slurm (checked on DAS-6).
 - **Like `ProcessPoolExecutor` with spawn:** calls and results must pickle
   by reference; the caller's `sys.path` is sent along. Unlike it, the
   initializer runs before every call, and failures arrive as `TaskFailed`.

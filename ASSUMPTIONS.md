@@ -11,7 +11,7 @@ What this repo takes as given. If one turns out wrong, update this file
 | inftools | git `ca33eae` (main, 2026-09-25) | `infinit`, WHAM analysis |
 | Python | 3.12 | infretis pins numpy < 2; numpy 1.26.4 has no 3.13 wheel |
 | numpy | 1.26.4 | from infretis (`^1.21.2`) |
-| HQ | 0.26.2, binary and PyPI client | measured in `../hyperqueue_test`; client and server must match. Before moving to 0.27.x, rerun the 1024-task autoalloc regression check |
+| HQ | 0.26.2, binary only (driven through its CLI) | measured in `../hyperqueue_test`; the event format of `hq journal stream` is HQ's own. Before moving to 0.27.x, rerun the 1024-task autoalloc regression check |
 | nixpkgs | `151fa4e` (same lock as `../hyperqueue_test`) | |
 | GROMACS | 2026.3 (nixpkgs; conda-forge on DAS-6) | production clusters use their own module |
 | LAMMPS | 22Jul2025_update4 (nixpkgs), 29Aug2024 (conda-forge on DAS-6), REAXFF + QEQ enabled | water_dissociation; on DAS-6 the newest conda-forge build whose `lmp` runs there (below) |
@@ -31,7 +31,7 @@ Exact Python package versions: `requirements-lock.txt`.
   runs, a fresh `HQ_SERVER_DIR` per Slurm job.
 - infretis comes from the GUTS fork: upstream plus fixes offered upstream,
   nothing gutsrun-specific. The launcher adds only checks for this run
-  (`restart.toml` backup, `wmdrun` under HQ, the infretis it needs).
+  (`wmdrun` under HQ, the infretis it needs).
 - Tasks carry paths and indices, never data.
 - One node per MD move; HQ multi-node tasks are experimental.
 
