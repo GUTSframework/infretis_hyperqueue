@@ -24,9 +24,11 @@ MINIFORGE_VERSION=26.7.2-0
 MINIFORGE_SHA256=281b0ac7d550802efc81af633225a5e6116d29ae72f3ab4eae7168c3931a4c05
 # Build strings pick the CPU, non-MPI variants: infretis starts one engine
 # process per move. GROMACS is the laptop's version (ASSUMPTIONS.md). LAMMPS
-# is the stable 29Aug2024: conda-forge's 2025.07.22 builds need glibc 2.34
-# or 2.38 although they declare 2.17, and DAS-6's glibc is older, so their
-# lmp does not start there.
+# is the stable 29Aug2024 build that needs glibc 2.14: DAS-6's glibc is
+# older than 2.29. Newer builds need 2.34 or 2.38; those since
+# conda-forge/lammps-feedstock#276 declare 2.38, so conda skips them, but
+# older ones declare 2.17, so conda installs them and their lmp does not
+# start.
 GROMACS_SPEC="gromacs=2026.3=nompi_*"
 LAMMPS_SPEC="lammps=2024.08.29=cpu_py312_h5afe51e_nompi_9"
 
