@@ -15,7 +15,14 @@ cores_per_node = 128
 [environment]
 # SURF's EasyBuild LAMMPS (Kokkos build), 2025 stack, foss-2024a. It
 # provides lmp. The venv's Python runs without a module.
+#
+# lmp is built with OpenMPI 5, and each move starts it as one process
+# without mpirun. With OpenMPI's defaults that start-up takes about 2.3 s
+# on a compute node (bench/time-lammps-move.sh; conda-forge's lmp on DAS-6:
+# 0.15 s), mostly waiting on UCX. Shared memory instead of UCX is enough
+# for one process, and for MPI within one node.
 setup = '''
 module load 2025
 module load LAMMPS/22Jul2025-foss-2024a-kokkos
+export OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,sm OMPI_MCA_osc=^ucx
 '''
