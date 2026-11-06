@@ -1,0 +1,25 @@
+# Snellius, SURF, with GROMACS (login nodes int*). What each key means, and
+# the other values it takes: sites/template.toml.
+#
+# Snellius has two site files because SURF's GROMACS and LAMMPS modules
+# cannot be loaded together: LAMMPS is only in the 2025 stack, built with
+# foss-2024a; GROMACS 2024.3 is only in the 2024 stack, and the 2025 stack's
+# GROMACS 2025.2 needs foss-2025a, which loading LAMMPS swaps out. The
+# other: sites/snellius-lammps.toml. Only [environment] differs.
+
+[slurm]
+# rome: 521 CPU nodes, billed per core (a whole node is 128 SBU per hour).
+# genoa (192 cores) is the larger alternative.
+partition = "rome"
+# Slurm reports 128 CPUs with one thread per core.
+cores_per_node = 128
+# No max_walltime: Slurm enforces the partition's 5 days itself, and its
+# default of 5 minutes never applies because every link sets --time.
+
+[environment]
+# SURF's EasyBuild GROMACS, 2024 stack. It provides gmx (thread-MPI) and
+# gmx_mpi. The venv's Python runs without a module.
+setup = '''
+module load 2024
+module load GROMACS/2024.3-foss-2024a
+'''

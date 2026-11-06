@@ -1,0 +1,21 @@
+# Snellius, SURF, with LAMMPS (login nodes int*). What each key means, and
+# the other values it takes: sites/template.toml. Why there are two
+# Snellius site files: sites/snellius-gromacs.toml. Only [environment]
+# differs.
+
+[slurm]
+# rome: 521 CPU nodes, billed per core (a whole node is 128 SBU per hour).
+# genoa (192 cores) is the larger alternative.
+partition = "rome"
+# Slurm reports 128 CPUs with one thread per core.
+cores_per_node = 128
+# No max_walltime: Slurm enforces the partition's 5 days itself, and its
+# default of 5 minutes never applies because every link sets --time.
+
+[environment]
+# SURF's EasyBuild LAMMPS (Kokkos build), 2025 stack, foss-2024a. It
+# provides lmp. The venv's Python runs without a module.
+setup = '''
+module load 2025
+module load LAMMPS/22Jul2025-foss-2024a-kokkos
+'''
