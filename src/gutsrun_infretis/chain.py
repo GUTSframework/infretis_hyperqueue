@@ -94,9 +94,13 @@ class InfretisRun:
         return Progress(cstep >= steps, f"step {cstep} of {steps}")
 
     def before_link(self, rundir: Path, link: int) -> None:
-        pass  # the launcher backs up restart.toml itself
+        """Hook run at the start of each link after the first; bench/chain.py
+        uses it to keep a copy of restart.toml per link. Nothing to do here:
+        restart.toml is all a link needs."""
 
-    def argv(self, python: str, rundir: Path, link: int) -> list[str]:
+    def argv(self, python: str, rundir: Path) -> list[str]:
+        """The launcher, from restart.toml once there is one, else from
+        infretis.toml."""
         inp = "restart.toml" if (rundir / "restart.toml").exists() else "infretis.toml"
         argv = [python, "-m", "gutsrun_infretis.launcher", "-i", inp,
                 "--cores-per-task", str(self.cores_per_task)]

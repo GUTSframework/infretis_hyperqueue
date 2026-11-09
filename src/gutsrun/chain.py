@@ -114,12 +114,16 @@ class Workload(Protocol):
         ...
 
     def before_link(self, rundir: Path, link: int) -> None:
-        """Called in links after the first, before anything else runs."""
+        """Prepare the run's state for link number `link` (2 or more), once
+        `progress` has found the run unfinished and before anything else
+        runs: before the next link is submitted, HQ starts or `argv` is
+        called. E.g. keep a copy of the state this link starts from."""
         ...
 
-    def argv(self, python: str, rundir: Path, link: int) -> list[str]:
-        """The command one link runs, in the run directory, with `python`
-        (the project venv's interpreter)."""
+    def argv(self, python: str, rundir: Path) -> list[str]:
+        """The command a link runs, in `rundir`, as a list for subprocess.
+        Where to continue comes from the run's state in `rundir`, not from
+        the link's number."""
         ...
 
 
@@ -577,7 +581,7 @@ def run_link(spec_path: str | Path, link: int) -> int:
                             spec.root, server, log_prefix, spec.nodes - 1, site.cores, env))
                     env["HQ_SERVER_DIR"] = str(server)
                     env["PATH"] = os.pathsep.join([hq_dir, env.get("PATH", "")])
-                argv = workload.argv(python, rundir, link)
+                argv = workload.argv(python, rundir)
                 if forwarder.received:
                     log.info("not starting the workload")
                 else:

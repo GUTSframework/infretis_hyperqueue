@@ -43,7 +43,7 @@ class Counter:
     def before_link(self, rundir: Path, link: int) -> None:
         (rundir / f"before{link}").touch()
 
-    def argv(self, python: str, rundir: Path, link: int) -> list[str]:
+    def argv(self, python: str, rundir: Path) -> list[str]:
         if self.crash:
             raise RuntimeError("boom")
         argv = [python, __file__, str(rundir), "--steps", str(self.steps),

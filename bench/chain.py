@@ -46,7 +46,7 @@ class BenchRun(InfretisRun):
         if (rundir / "restart.toml").exists():
             shutil.copy2(rundir / "restart.toml", rundir / f"restart.toml.link{link}")
 
-    def argv(self, python: str, rundir: Path, link: int) -> list[str]:
+    def argv(self, python: str, rundir: Path) -> list[str]:
         argv = [python, str(BENCH / "bare_run.py"), self.example, str(rundir), "--in-place",
                 "--runner", self.runner]
         if self.runner == "gutsrun":

@@ -505,17 +505,17 @@ def test_infretis_progress_and_argv(tmp_path):
     run = InfretisRun(cores_per_task=2)
     assert run.needs_hq
     assert not run.progress(tmp_path).done  # not started
-    assert run.argv("py", tmp_path, 1) == [
+    assert run.argv("py", tmp_path) == [
         "py", "-m", "gutsrun_infretis.launcher", "-i", "infretis.toml",
         "--cores-per-task", "2"]
     (tmp_path / "restart.toml").write_text(
         "[current]\ncstep = 40\n[simulation]\nsteps = 100\n")
     progress = run.progress(tmp_path)
     assert not progress.done and progress.text == "step 40 of 100"
-    assert run.argv("py", tmp_path, 1)[4] == "restart.toml"
-    assert InfretisRun(time_request="30m").argv("py", tmp_path, 1)[-2:] == [
+    assert run.argv("py", tmp_path)[4] == "restart.toml"
+    assert InfretisRun(time_request="30m").argv("py", tmp_path)[-2:] == [
         "--time-request", "30m"]
-    assert InfretisRun(gpus_per_task=1).argv("py", tmp_path, 1)[-2:] == [
+    assert InfretisRun(gpus_per_task=1).argv("py", tmp_path)[-2:] == [
         "--gpus-per-task", "1"]
     (tmp_path / "restart.toml").write_text("[current]\ncstep = ")
     with pytest.raises(StateError, match="does not parse"):
@@ -592,6 +592,6 @@ def test_bench_workload_imports_from_bench(project):
     assert not run.needs_hq
     run.before_link(project.rundir, 2)  # no restart.toml yet: nothing to back up
     assert not list(project.rundir.glob("restart.toml*"))
-    assert run.argv("py", project.rundir, 2) == [
+    assert run.argv("py", project.rundir) == [
         "py", str(REPO / "bench" / "bare_run.py"), "ex", str(project.rundir), "--in-place",
         "--runner", "bare"]
