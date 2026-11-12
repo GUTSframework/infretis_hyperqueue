@@ -102,15 +102,19 @@ Instead of options, a run directory can hold its settings in
 
 ```toml
 site = "das6"
-links = 20             # a cap on the whole chain (default 10)
-time = "00:14:00"      # walltime per link (default: just under the site's max_walltime)
-margin = 90            # seconds before the walltime that SIGTERM comes (default 90)
-cores_per_task = 1     # cores per infretis move, i.e. per MD engine call (default 1)
-gpus_per_task = 0      # GPUs per infretis move (default 0)
-nodes = 1              # nodes per link, each with an HQ worker on all its cores (default 1)
-constraint = "A4000"   # node features the links need, e.g. a GPU type (default: none)
-time_request = "30m"   # start a move only if its link has this much time left (default: off)
-name = "water-run-3"   # label in the Slurm job names (default: the directory's name)
+links = 20             # a cap on the whole chain
+time = "00:14:00"      # walltime per link (not set: just under the site's max_walltime)
+margin = 90            # seconds before the walltime that SIGTERM comes
+cores_per_task = 1     # cores per infretis move, i.e. per MD engine call
+gpus_per_task = 0      # GPUs per infretis move
+nodes = 1              # nodes per link, each with an HQ worker on all its cores
+constraint = "A4000"   # node features the links need, e.g. a GPU type
+time_request = "30m"   # start a move only if its link has this much time left
+name = "water-run-3"   # label in the Slurm job names (not set: the directory's name)
+```
+
+Only `site` is needed (here or as `--site`); `gutsrun-infretis submit
+--help` shows the others' defaults.
 ```
 
 The simulation itself (steps, workers, engines) stays in `infretis.toml`.

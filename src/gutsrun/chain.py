@@ -135,9 +135,9 @@ class Spec:
     site: str  # sites/<site>.toml
     name: str  # in the Slurm job names
     workload: str  # "package.module:Class"
+    time: str  # walltime per link, in Slurm's format
     args: dict[str, Any] = field(default_factory=dict)  # keyword arguments for the workload
     pythonpath: list[str] = field(default_factory=list)  # where else to import it from
-    time: str = "00:14:00"  # walltime per link, in Slurm's format
     margin: int = 90  # seconds before the walltime that SIGTERM is asked for
     links: int = 10  # most links in the chain
     nodes: int = 1  # per link; nodes after the first only run HQ workers

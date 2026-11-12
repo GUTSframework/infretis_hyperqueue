@@ -532,19 +532,19 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
     project.use_fakes(monkeypatch)
     rundir = project.rundir
     with pytest.raises(ChainError, match="no infretis.toml"):
-        cli.make_spec(rundir, {}, root=project.root)
+        cli.make_spec(rundir, cli.Config(), root=project.root)
     (rundir / "infretis.toml").write_text("")
     with pytest.raises(ChainError, match="no site"):
-        cli.make_spec(rundir, {}, root=project.root)
+        cli.make_spec(rundir, cli.Config(), root=project.root)
     (rundir / "gutsrun.toml").write_text('site = "test"\nlinks = 7\nwalltime = "1"\n')
     with pytest.raises(ChainError, match="unknown key 'walltime'"):
-        cli.make_spec(rundir, {}, root=project.root)
+        cli.make_spec(rundir, cli.Config(), root=project.root)
     (rundir / "gutsrun.toml").write_text(
         'site = "test"\nlinks = 7\ncores_per_task = 2\nnodes = 3\ntime_request = "30m"\n'
         'gpus_per_task = 1\nconstraint = "A4000"\n')
     with pytest.raises(ChainError, match="cores_per_task is 3, but a node of test has 2 cores"):
-        cli.make_spec(rundir, {"cores_per_task": 3}, root=project.root)
-    spec, source = cli.make_spec(rundir, {"links": 5, "name": None}, root=project.root)
+        cli.make_spec(rundir, cli.Config(cores_per_task=3), root=project.root)
+    spec, source = cli.make_spec(rundir, cli.Config(links=5), root=project.root)
     assert (spec.links, spec.name, spec.time) == (5, "run", "0:14:00")  # just under 15 min
     assert source == "just under max_walltime 00:15:00 in sites/test.toml"
     assert (spec.nodes, spec.constraint) == (3, "A4000")
@@ -557,13 +557,31 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
     assert not spec.dir.exists() and project.calls("sbatch") == []  # nothing written
 
     (rundir / "gutsrun.toml").write_text('site = "test"\ntime = "00:20:00"\n')
-    assert cli.make_spec(rundir, {}, root=project.root)[1] == "from gutsrun.toml"
-    spec, source = cli.make_spec(rundir, {"time": "00:30:00"}, root=project.root)
+    assert cli.make_spec(rundir, cli.Config(), root=project.root)[1] == "from gutsrun.toml"
+    spec, source = cli.make_spec(rundir, cli.Config(time="00:30:00"), root=project.root)
     assert (spec.time, source) == ("00:30:00", "from --time")
     monkeypatch.setattr(cli, "make_spec", functools.partial(cli.make_spec, root=project.root))
     cli.main(["submit", "--check", str(rundir)])
     assert capsys.readouterr().out.startswith(
         "walltime per link: 00:20:00 (from gutsrun.toml)\n")
+
+
+def test_unset_settings_take_the_defaults_of_spec_and_infretisrun(project):
+    rundir = project.rundir
+    (rundir / "infretis.toml").write_text("")
+    (rundir / "gutsrun.toml").write_text('site = "test"\ntime = "00:10:00"\n')
+    spec, _ = cli.make_spec(rundir, cli.Config(), root=project.root)
+    defaults = {f.name: f.default for f in dataclasses.fields(Spec)}
+    assert (spec.links, spec.margin, spec.nodes, spec.constraint) == (
+        defaults["links"], defaults["margin"], defaults["nodes"], defaults["constraint"])
+    assert spec.args == dataclasses.asdict(InfretisRun())
+    assert f"(default: {defaults['margin']})" in cli.setting_help("margin")
+    assert cli.setting_help("cores_per_task").endswith("(default: 1)")
+    assert "default" not in cli.setting_help("constraint")  # None: nothing to show
+
+    (rundir / "gutsrun.toml").write_text('site = "test"\nlinks = true\n')
+    with pytest.raises(ChainError, match="links must be an integer"):
+        cli.make_spec(rundir, cli.Config(), root=project.root)
 
 
 def test_status_exit_code_says_whether_the_chain_is_active(project, monkeypatch, capsys):
@@ -590,7 +608,7 @@ def test_status_exit_code_says_whether_the_chain_is_active(project, monkeypatch,
 
 def test_bench_workload_imports_from_bench(project):
     spec = Spec(rundir=str(project.rundir), site="test", name="b", workload="chain:BenchRun",
-                pythonpath=[str(REPO / "bench")],
+                time="00:05:00", pythonpath=[str(REPO / "bench")],
                 args={"example": "ex", "runner": "bare"}, root=str(project.root))
     run = spec.make_workload()
     assert not run.needs_hq

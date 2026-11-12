@@ -22,13 +22,14 @@ including each link's log, go to .gutsrun/ there.
 # Standard library only: a link imports this module to read the run's state.
 
 import argparse
+import dataclasses
 import json
 import shlex
 import sys
 import tomllib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 from gutsrun.chain import (
     ROOT,
@@ -51,28 +52,11 @@ from gutsrun.site import Site, SiteError
 
 EXIT_ACTIVE = 10  # `status`: some job of the chain is still queued or running
 
-# gutsrun.toml's keys, their types and what they mean (for --help).
-CONFIG = {
-    "site": (str, "sites/<site>.toml in the gutsrun checkout"),
-    "name": (str, "label for the Slurm job names (default: the directory's name)"),
-    "time": (str, "walltime per link, e.g. 00:14:00 (default: just under the site's "
-                  "max_walltime)"),
-    "links": (int, "most links, a cap on the whole chain (default: 10)"),
-    "margin": (int, "seconds before the walltime that SIGTERM is asked for (default: 90)"),
-    "cores_per_task": (int, "cores per infretis move, i.e. per MD engine call (default: 1)"),
-    "gpus_per_task": (int, "GPUs per infretis move (default: 0)"),
-    "nodes": (int, "nodes per link, each with an HQ worker on all its cores (default: 1)"),
-    "constraint": (str, "Slurm node features the link's nodes must have, e.g. a GPU type "
-                        "such as A4000 (sbatch --constraint; default: none)"),
-    "time_request": (str, "start a move only on a worker with this much time left in its "
-                          "link, e.g. 30m: about the longest move plus `margin` "
-                          "(default: off)"),
-}
-
 
 @dataclass
 class InfretisRun:
-    """The infretis workload: the gutsrun launcher with HQ."""
+    """The infretis workload: the gutsrun launcher with HQ. Its fields are
+    the defaults of the settings of the same name (see `Config`)."""
 
     cores_per_task: int = 1
     gpus_per_task: int = 0
@@ -111,57 +95,118 @@ class InfretisRun:
         return argv
 
 
-def read_config(rundir: Path) -> dict[str, Any]:
-    """gutsrun.toml in `rundir`, checked against CONFIG; {} without one."""
+def setting(text: str) -> Any:
+    """A `Config` field: not set (None) unless gutsrun.toml or the command
+    line sets it. `text` is for --help."""
+    return field(default=None, metadata={"help": text})
+
+
+@dataclass
+class Config:
+    """The user's settings for a chain, as written: gutsrun.toml's keys, which
+    are also `submit`'s options. Any of them may be missing (None).
+    `make_spec` turns them into a `Spec`, the complete chain the links read;
+    a setting that is not set takes its default from there (`Spec` for the
+    chain's settings, `InfretisRun` for the moves')."""
+
+    site: str | None = setting("sites/<site>.toml in the gutsrun checkout (required)")
+    name: str | None = setting("label for the Slurm job names (default: the directory's name)")
+    time: str | None = setting("walltime per link, e.g. 00:14:00 (default: just under the "
+                               "site's max_walltime)")
+    links: int | None = setting("most links, a cap on the whole chain")
+    margin: int | None = setting("seconds before the walltime that SIGTERM is asked for")
+    nodes: int | None = setting("nodes per link, each with an HQ worker on all its cores")
+    constraint: str | None = setting("Slurm node features the link's nodes must have, e.g. "
+                                     "a GPU type such as A4000 (sbatch --constraint; not "
+                                     "set: any node)")
+    cores_per_task: int | None = setting("cores per infretis move, i.e. per MD engine call")
+    gpus_per_task: int | None = setting("GPUs per infretis move")
+    time_request: str | None = setting("start a move only on a worker with this much time "
+                                       "left in its link, e.g. 30m: about the longest move "
+                                       "plus `margin` (not set: any worker)")
+
+
+SETTINGS = [f.name for f in dataclasses.fields(Config)]  # gutsrun.toml's keys
+CHAIN_SETTINGS = ["links", "margin", "nodes", "constraint"]  # passed on to Spec
+WORKLOAD_SETTINGS = [f.name for f in dataclasses.fields(InfretisRun)]  # to InfretisRun
+
+
+def setting_type(key: str) -> type:
+    """The type of a `Config` field, without its None: int or str."""
+    [f] = [f for f in dataclasses.fields(Config) if f.name == key]
+    return next(t for t in get_args(f.type) if t is not type(None))
+
+
+def setting_help(key: str) -> str:
+    """--help's text for a setting, with the default it takes from `Spec` or
+    `InfretisRun` when it is not set."""
+    [f] = [f for f in dataclasses.fields(Config) if f.name == key]
+    text = f.metadata["help"]
+    owner = Spec if key in CHAIN_SETTINGS else InfretisRun if key in WORKLOAD_SETTINGS else None
+    if owner is None:
+        return text
+    [default] = [o.default for o in dataclasses.fields(owner) if o.name == key]
+    return text if default is None else f"{text} (default: {default})"
+
+
+def read_config(rundir: Path) -> Config:
+    """gutsrun.toml in `rundir`, checked against `Config`; nothing set
+    without one."""
     path = rundir / "gutsrun.toml"
     if not path.exists():
-        return {}
-    config = tomllib.loads(path.read_text())
-    for key, value in config.items():
-        if key not in CONFIG:
-            raise ChainError(f"{path}: unknown key {key!r}; known: {', '.join(CONFIG)}")
-        if not isinstance(value, CONFIG[key][0]):
-            raise ChainError(f"{path}: {key} must be a {CONFIG[key][0].__name__}")
-    return config
+        return Config()
+    values = tomllib.loads(path.read_text())
+    for key, value in values.items():
+        if key not in SETTINGS:
+            raise ChainError(f"{path}: unknown key {key!r}; known: {', '.join(SETTINGS)}")
+        kind = setting_type(key)
+        # bool is a subclass of int: `links = true` must not pass as 1.
+        if isinstance(value, bool) or not isinstance(value, kind):
+            wanted = "an integer" if kind is int else "a string"
+            raise ChainError(f"{path}: {key} must be {wanted}")
+    return Config(**values)
 
 
-def make_spec(rundir: Path, options: dict[str, Any],
+def make_spec(rundir: Path, options: Config,
               root: str | Path = ROOT) -> tuple[Spec, str]:
     """The chain for `rundir`, from gutsrun.toml's settings overridden by
-    `options` (those not None), and where its walltime came from, for the
-    user. `root`: the gutsrun checkout."""
+    the command line's `options` (those set), and where its walltime came
+    from, for the user. `root`: the gutsrun checkout."""
     rundir = rundir.resolve()
     if not (rundir / "infretis.toml").exists():
         raise ChainError(f"no infretis.toml in {rundir}")
-    options = {k: v for k, v in options.items() if v is not None}
-    config = read_config(rundir) | options
-    if "site" not in config:
+    from_file = read_config(rundir)
+    config = dataclasses.replace(
+        from_file, **{k: v for k, v in asdict(options).items() if v is not None})
+    if config.site is None:
         raise ChainError("no site: set `site` in gutsrun.toml or pass --site")
-    spec = Spec(rundir=str(rundir), site=config["site"],
-                name=config.get("name", rundir.name),
-                workload="gutsrun_infretis.chain:InfretisRun",
-                args={"cores_per_task": config.get("cores_per_task", 1),
-                      "gpus_per_task": config.get("gpus_per_task", 0),
-                      "time_request": config.get("time_request")},
-                margin=config.get("margin", 90), links=config.get("links", 10),
-                nodes=config.get("nodes", 1), constraint=config.get("constraint"),
-                root=str(root))
-    site = Site(spec.root, spec.site)
-    if spec.args["cores_per_task"] > site.cores:
+    site = Site(root, config.site)
+
+    def chosen(keys: list[str]) -> dict[str, Any]:
+        """The settings among `keys` that are set: the rest keep their defaults."""
+        return {k: getattr(config, k) for k in keys if getattr(config, k) is not None}
+
+    run = InfretisRun(**chosen(WORKLOAD_SETTINGS))
+    if run.cores_per_task > site.cores:
         # HQ would hold every move: no worker has that many cores.
-        raise ChainError(f"cores_per_task is {spec.args['cores_per_task']}, but a node of "
-                         f"{spec.site} has {site.cores} cores (cores_per_node); no move "
+        raise ChainError(f"cores_per_task is {run.cores_per_task}, but a node of "
+                         f"{config.site} has {site.cores} cores (cores_per_node); no move "
                          "would ever start")
-    if "time" in options:
-        spec.time, source = options["time"], "from --time"
-    elif "time" in config:
-        spec.time, source = config["time"], "from gutsrun.toml"
+
+    if options.time is not None:
+        time, source = options.time, "from --time"
+    elif from_file.time is not None:
+        time, source = from_file.time, "from gutsrun.toml"
     else:
         limit = site.max_walltime
         if limit is None:
             raise ChainError("no time: set `time` in gutsrun.toml or pass --time")
-        spec.time = walltime(seconds(limit) - 60)
-        source = f"just under max_walltime {limit} in sites/{spec.site}.toml"
+        time = walltime(seconds(limit) - 60)
+        source = f"just under max_walltime {limit} in sites/{config.site}.toml"
+
+    spec = Spec(rundir=str(rundir), site=config.site, name=config.name or rundir.name,
+                workload="gutsrun_infretis.chain:InfretisRun", time=time, args=asdict(run),
+                root=str(root), **chosen(CHAIN_SETTINGS))
     return spec, source
 
 
@@ -178,13 +223,14 @@ def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="gutsrun-infretis",
                                 description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter,
-                                epilog="gutsrun.toml keys: " + ", ".join(CONFIG))
+                                epilog="gutsrun.toml keys: " + ", ".join(SETTINGS))
     commands = p.add_subparsers(dest="command", required=True)
 
     sub = commands.add_parser("submit", help="start a chain in the run directory")
     sub.add_argument("rundir", nargs="?", type=Path, default=Path.cwd())
-    for key, (kind, text) in CONFIG.items():
-        sub.add_argument(f"--{key.replace('_', '-')}", dest=key, type=kind, help=text)
+    for key in SETTINGS:
+        sub.add_argument(f"--{key.replace('_', '-')}", dest=key, type=setting_type(key),
+                         help=setting_help(key))
     sub.add_argument("--check", action="store_true",
                      help="run the checks and show the sbatch command; submit nothing")
 
@@ -208,7 +254,8 @@ def main(argv: list[str] | None = None) -> None:
     setup_logging()
     try:
         if args.command == "submit":
-            spec, source = make_spec(args.rundir, {key: getattr(args, key) for key in CONFIG})
+            spec, source = make_spec(args.rundir,
+                                     Config(**{key: getattr(args, key) for key in SETTINGS}))
             print(f"walltime per link: {spec.time} ({source})")
             if args.check:
                 print(*describe(spec), sep="\n")
