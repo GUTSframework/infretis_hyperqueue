@@ -22,21 +22,21 @@ import gutsrun_infretis.chain as cli
 from gutsrun.chain import (
     STOPPED_BY_SIGNAL,
     ChainError,
-    Report,
-    Spec,
+    ChainSpec,
     StateError,
-    events,
-    follow,
+    StatusReport,
+    chain_status,
+    checkout_revision,
+    current_chain_events,
+    follow_chain_status,
+    link_sbatch_argv,
     load_spec,
-    note,
-    revision,
-    sbatch_argv,
-    seconds,
-    start,
-    status,
-    stop,
-    walltime,
-    why_over,
+    record_event,
+    seconds_to_slurm_walltime,
+    slurm_walltime_to_seconds,
+    start_chain,
+    stop_chain,
+    why_chain_is_over,
 )
 from gutsrun.site import Site, SiteError, setup_env
 from gutsrun_infretis.chain import InfretisRun
@@ -120,24 +120,24 @@ class Project:
         else:
             monkeypatch.setenv("FAKE_SQUEUE", squeue)
 
-    def make_spec(self, links: int = 2, nodes: int = 1, **counter) -> Spec:
-        return Spec(rundir=str(self.rundir), site="test", name="r",
-                    workload="chain_workload:Counter", pythonpath=[str(REPO / "tests")],
-                    args=counter, time="00:05:00", links=links, nodes=nodes,
-                    root=str(self.root))
+    def make_spec(self, links: int = 2, nodes: int = 1, **counter) -> ChainSpec:
+        return ChainSpec(rundir=str(self.rundir), site="test", name="r",
+                         workload="chain_workload:Counter", pythonpath=[str(REPO / "tests")],
+                         args=counter, time="00:05:00", links=links, nodes=nodes,
+                         root=str(self.root))
 
-    def spec(self, links: int = 2, nodes: int = 1, **counter) -> Spec:
+    def spec(self, links: int = 2, nodes: int = 1, **counter) -> ChainSpec:
         spec = self.make_spec(links, nodes, **counter)
-        start(spec, submit_first=False)
+        start_chain(spec, submit_first=False)
         return spec
 
-    def start_link(self, spec: Spec, n: int, **env: str) -> subprocess.Popen[str]:
+    def start_link(self, spec: ChainSpec, n: int, **env: str) -> subprocess.Popen[str]:
         """Start link `n` as a process, as Slurm would."""
-        argv = [sys.executable, "-m", "gutsrun.chain", "link", str(spec.path), str(n)]
+        argv = [sys.executable, "-m", "gutsrun.chain", "link", str(spec.spec_path), str(n)]
         return subprocess.Popen(argv, cwd=self.root, env={**self.env, **env},
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
-    def link(self, spec: Spec, n: int, **env: str) -> tuple[int, str]:
+    def link(self, spec: ChainSpec, n: int, **env: str) -> tuple[int, str]:
         """Run link `n` to its end; its exit code and output."""
         proc = self.start_link(spec, n, **env)
         out, _ = proc.communicate(timeout=120)
@@ -147,7 +147,7 @@ class Project:
         return [line for line in self.log.read_text().splitlines() if line.startswith(cmd)]
 
 
-def step(spec: Spec) -> int:
+def step(spec: ChainSpec) -> int:
     return json.loads((Path(spec.rundir) / "state.json").read_text())["step"]
 
 
@@ -160,8 +160,8 @@ def project(tmp_path):
     ("15", 900), ("15:30", 930), ("00:14:00", 840), ("48:00:00", 172800),
     ("2-0", 172800), ("1-2:30", 95400), ("1-02:03:04", 93784)])
 def test_seconds_reads_slurm_walltimes(text, expected):
-    assert seconds(text) == expected
-    assert seconds(walltime(expected)) == expected
+    assert slurm_walltime_to_seconds(text) == expected
+    assert slurm_walltime_to_seconds(seconds_to_slurm_walltime(expected)) == expected
 
 
 # --- sites --------------------------------------------------------------------------
@@ -217,75 +217,77 @@ def test_a_failing_site_setup_fails_the_link(project):
 def test_start_submits_link_1_with_site_options(project, monkeypatch):
     project.use_fakes(monkeypatch)
     spec = project.make_spec()
-    assert start(spec) == "1001"
+    assert start_chain(spec) == "1001"
     [call] = project.calls("sbatch")
     for part in ["--partition=testq", "--exclusive", "--nodes=1", "--time=00:05:00",
                  "--signal=B:TERM@90", f"--chdir={project.rundir}",
                  f"--output={project.rundir}/.gutsrun/link1-%j.out",
                  f"exec {project.root}/.venv/bin/python -m gutsrun.chain link",
-                 f"{spec.path} 1"]:
+                 f"{spec.spec_path} 1"]:
         assert part in call
     assert "--dependency" not in call
     assert load_spec(project.rundir) == spec
-    assert "--nodes=2" in sbatch_argv(project.make_spec(nodes=2), Site(project.root, "test"), 1)
+    site = Site(project.root, "test")
+    assert "--nodes=2" in link_sbatch_argv(project.make_spec(nodes=2), site, 1)
     gpu = project.make_spec()
     gpu.constraint = "A4000"
-    assert "--constraint=A4000" in sbatch_argv(gpu, Site(project.root, "test"), 1)
-    assert [e["event"] for e in events(spec)] == ["chain", "submitted"]
-    first = events(spec)[0]
+    assert "--constraint=A4000" in link_sbatch_argv(gpu, Site(project.root, "test"), 1)
+    assert [e["event"] for e in current_chain_events(spec)] == ["chain", "submitted"]
+    first = current_chain_events(spec)[0]
     assert first["walltime"] == "00:05:00"
     datetime.fromisoformat(first["time"])  # when the chain started, not its walltime
 
 
 def test_start_refusals(project):
-    def spec(**changes) -> Spec:
+    def spec(**changes) -> ChainSpec:
         return dataclasses.replace(project.make_spec(), **changes)
 
     with pytest.raises(ChainError, match="no time to run"):
-        start(spec(time="00:02:00"), submit_first=False)
+        start_chain(spec(time="00:02:00"), submit_first=False)
     with pytest.raises(ChainError, match="no run directory"):
-        start(spec(rundir="/nonexistent"), submit_first=False)
+        start_chain(spec(rundir="/nonexistent"), submit_first=False)
     (project.rundir / "state.json").write_text('{"step": 5}')
     with pytest.raises(ChainError, match="is done: step 5 of 5"):
-        start(project.make_spec(), submit_first=False)
+        start_chain(project.make_spec(), submit_first=False)
     (project.rundir / "state.json").write_text("{")
     with pytest.raises(StateError, match="does not parse"):
-        start(project.make_spec(), submit_first=False)
+        start_chain(project.make_spec(), submit_first=False)
     with pytest.raises(ChainError, match="nodes = 0; need at least 1"):
-        start(spec(nodes=0), submit_first=False)
+        start_chain(spec(nodes=0), submit_first=False)
     with pytest.raises(ChainError, match="does not run its tasks through HQ"):
-        start(spec(nodes=2), submit_first=False)
+        start_chain(spec(nodes=2), submit_first=False)
     (project.rundir / "state.json").unlink()
-    start(spec(time="00:15:00"), submit_first=False)  # the daytime limit is not enforced
+    start_chain(spec(time="00:15:00"), submit_first=False)  # the daytime limit is not enforced
 
 
 def test_sbatch_missing_or_refusing(project, monkeypatch):
     spec = project.make_spec()
     monkeypatch.setenv("PATH", "/nonexistent")
     with pytest.raises(ChainError, match="no sbatch on PATH"):
-        start(spec)
-    assert not spec.dir.exists()  # nothing written
+        start_chain(spec)
+    assert not spec.gutsrun_dir.exists()  # nothing written
     project.use_fakes(monkeypatch, squeue="")
     (project.fakebin / "sbatch").write_text(
         "#!/usr/bin/env bash\necho 'sbatch: error: invalid partition specified' >&2\nexit 1\n")
     with pytest.raises(ChainError, match="sbatch refused link 1, nothing submitted: .*partition"):
-        start(spec)
-    assert [e["event"] for e in events(spec)] == ["chain", "not submitted"]
-    assert status(spec).over == "no link was submitted"
+        start_chain(spec)
+    assert [e["event"] for e in current_chain_events(spec)] == ["chain", "not submitted"]
+    assert chain_status(spec).over == "no link was submitted"
 
 
 def test_a_new_chain_waits_for_the_last_to_leave_the_queue(project, monkeypatch):
     project.use_fakes(monkeypatch, squeue="1001 PENDING 0:00 (None)")
     spec = project.make_spec()
-    start(spec)
+    start_chain(spec)
     with pytest.raises(ChainError, match="still queued or running .*1001"):
-        start(spec)
+        start_chain(spec)
     project.use_fakes(monkeypatch)  # squeue does not answer
     with pytest.raises(ChainError, match="squeue does not answer"):
-        start(spec)
+        start_chain(spec)
     project.use_fakes(monkeypatch, squeue="")
-    assert start(spec) == "1002"
-    assert [e["event"] for e in events(spec)] == ["chain", "submitted"]  # the new chain's
+    assert start_chain(spec) == "1002"
+    # the new chain's:
+    assert [e["event"] for e in current_chain_events(spec)] == ["chain", "submitted"]
 
 
 # --- links --------------------------------------------------------------------------
@@ -298,13 +300,13 @@ def test_done_cancels_the_pre_submitted_link(project, monkeypatch):
     assert step(spec) == 5
     assert (project.rundir / "cwd.txt").read_text() == str(project.rundir)
     [sbatch] = project.calls("sbatch")
-    assert "--dependency=afterany:nojob-" in sbatch and f"{spec.path} 2" in sbatch
+    assert "--dependency=afterany:nojob-" in sbatch and f"{spec.spec_path} 2" in sbatch
     assert project.calls("scancel") == ["scancel 1001"]
-    ended = [e for e in events(spec) if e["event"] == "ended"]
+    ended = [e for e in current_chain_events(spec) if e["event"] == "ended"]
     assert [(e["link"], e["result"], e["progress"]) for e in ended] == [
         (1, "done", "step 5 of 5")]
     project.use_fakes(monkeypatch, squeue="")
-    report = status(spec)
+    report = chain_status(spec)
     assert report.links[1].endswith("job 1001       cancelled: the run was done")
     assert report.over == "the run is done"
 
@@ -345,13 +347,13 @@ def test_a_crashing_link_ends_in_the_record_and_cancels_the_next(project):
     assert rc == 1
     assert "RuntimeError: boom" in out  # the traceback is in the link's log
     assert project.calls("scancel") == ["scancel 1001"]
-    [ended] = [e for e in events(spec) if e["event"] == "ended"]
+    [ended] = [e for e in current_chain_events(spec) if e["event"] == "ended"]
     assert ended["result"] == "crashed: RuntimeError: boom"
 
 
 def test_revision_without_git(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
-    assert revision(tmp_path) == "unknown"
+    assert checkout_revision(tmp_path) == "unknown"
 
 
 def test_unreadable_state_stops_the_chain_before_submitting(project):
@@ -382,7 +384,7 @@ def test_status_reports_progress_and_each_link(project, monkeypatch, capsys):
     proc.communicate(timeout=60)
 
     project.use_fakes(monkeypatch, squeue="1001 PENDING 0:00 (Dependency)")
-    report = status(spec)
+    report = chain_status(spec)
     assert report.active and report.over is None
     assert report.progress.startswith("r (test): step ")
     assert "ended" in report.links[0] and STOPPED_BY_SIGNAL in report.links[0]
@@ -390,15 +392,15 @@ def test_status_reports_progress_and_each_link(project, monkeypatch, capsys):
     assert "job 1001" in report.links[1]
 
     project.use_fakes(monkeypatch, squeue="")
-    report = status(spec)
+    report = chain_status(spec)
     assert not report.active and report.links[1].endswith("not in the queue, no end recorded")
     assert report.over == (
-        f"link 2 recorded no end (cancelled or killed); see {spec.dir}/link2-1001.out")
-    follow(spec, interval=0)  # returns: nothing left in the queue
+        f"link 2 recorded no end (cancelled or killed); see {spec.gutsrun_dir}/link2-1001.out")
+    follow_chain_status(spec, interval=0)  # returns: nothing left in the queue
     assert "chain over: link 2" in capsys.readouterr().out
 
     project.use_fakes(monkeypatch)
-    report = status(spec)
+    report = chain_status(spec)
     assert report.active and "(squeue does not answer)" in report.links
 
 
@@ -416,41 +418,43 @@ def test_why_a_chain_is_over(project):
         return {"event": "ended", "link": link, "job": str(link), "result": result}
 
     walltime = [submitted(1), started(1), submitted(2), ended(1, STOPPED_BY_SIGNAL)]
-    assert why_over(spec, [{"event": "chain"}]) == "no link was submitted"
-    assert why_over(spec, [submitted(1), started(1), ended(1, "done")]) == "the run is done"
-    assert why_over(spec, [*walltime, started(2), ended(2, STOPPED_BY_SIGNAL)]) == (
+    assert why_chain_is_over(spec, [{"event": "chain"}]) == "no link was submitted"
+    done = [submitted(1), started(1), ended(1, "done")]
+    assert why_chain_is_over(spec, done) == "the run is done"
+    assert why_chain_is_over(spec, [*walltime, started(2), ended(2, STOPPED_BY_SIGNAL)]) == (
         "link 2 stopped at the walltime, the last link; `submit` again to continue")
-    assert why_over(spec, [*walltime, started(2), ended(2, "failed (exit 1)")]) == (
-        f"link 2: failed (exit 1); see {spec.dir}/link2-2.out")
+    assert why_chain_is_over(spec, [*walltime, started(2), ended(2, "failed (exit 1)")]) == (
+        f"link 2: failed (exit 1); see {spec.gutsrun_dir}/link2-2.out")
     # The last link, not the last "ended" event, says why.
     for record in ([*walltime, started(2)], walltime):
-        assert why_over(spec, record) == (
-            f"link 2 recorded no end (cancelled or killed); see {spec.dir}/link2-2.out")
+        assert why_chain_is_over(spec, record) == (
+            f"link 2 recorded no end (cancelled or killed); see {spec.gutsrun_dir}/link2-2.out")
     spec.stop_file.touch()
-    assert why_over(spec, walltime).startswith("stopped by request")
+    assert why_chain_is_over(spec, walltime).startswith("stopped by request")
     # Done wins over a stop that came after the end.
-    assert why_over(spec, [*walltime, started(2), ended(2, "done")]) == "the run is done"
+    assert why_chain_is_over(spec, [*walltime, started(2), ended(2, "done")]) == "the run is done"
 
 
 def test_follow_prints_each_change_until_the_chain_is_over(project, monkeypatch):
     spec = project.make_spec()
-    reports = iter([Report("step 1", [], None, True), Report("step 1", [], None, True),
-                    Report("step 2", [], None, True), Report("step 2", [], "done", False)])
+    reports = iter([StatusReport("step 1", [], None, True), StatusReport("step 1", [], None, True),
+                    StatusReport("step 2", [], None, True),
+                    StatusReport("step 2", [], "done", False)])
     printed = []
-    monkeypatch.setattr(chain, "status", lambda _spec: next(reports))
+    monkeypatch.setattr(chain, "chain_status", lambda _spec: next(reports))
     monkeypatch.setattr(chain.time, "sleep", lambda _s: None)
     monkeypatch.setattr("builtins.print", lambda *a, **_: printed.append(a[1]))
-    follow(spec)
+    follow_chain_status(spec)
     assert printed == ["step 1", "step 2", "step 2"]  # the repeat is not printed
 
 
 def test_stop_cancels_queued_links_and_signals_the_running_one(project, monkeypatch):
     spec = project.make_spec()
     project.use_fakes(monkeypatch, squeue="1001 RUNNING 0:10 node1")
-    start(spec)
-    note(spec, "submitted", link=2, job="1002")
+    start_chain(spec)
+    record_event(spec, "submitted", link=2, job="1002")
     monkeypatch.setenv("FAKE_SQUEUE", "1001 RUNNING 0:10 node1\n1002 PENDING 0:00 (Dependency)")
-    assert stop(spec) == ["link 1 (job 1001): sent SIGTERM", "link 2 (job 1002): cancelled"]
+    assert stop_chain(spec) == ["link 1 (job 1001): sent SIGTERM", "link 2 (job 1002): cancelled"]
     assert project.calls("scancel") == ["scancel --batch --signal=TERM 1001", "scancel 1002"]
     assert spec.stop_file.exists()
 
@@ -481,8 +485,8 @@ def test_hq_server_and_worker_in_the_link(project):
     assert rc == 0, out
     seen = json.loads((project.rundir / "hq.json").read_text())
     assert "hq-current" in seen["listed"] and seen["hq"]
-    assert not list(spec.dir.glob("hq-*"))  # server dir removed
-    assert list(spec.dir.glob("link1-*-hq-worker.log"))
+    assert not list(spec.gutsrun_dir.glob("hq-*"))  # server dir removed
+    assert list(spec.gutsrun_dir.glob("link1-*-hq-worker.log"))
 
 
 @pytest.mark.hq
@@ -496,7 +500,7 @@ def test_hq_workers_on_the_other_nodes(tmp_path):
     assert json.loads((project.rundir / "hq.json").read_text())["workers"] == 2
     [srun] = project.calls("srun")
     for part in ["--nodes=1", "--ntasks=1", "--ntasks-per-node=1", "--relative=1",
-                 "--cpus-per-task=2", f"--output={spec.dir}/link1-4242-hq-worker-%N.log",
+                 "--cpus-per-task=2", f"--output={spec.gutsrun_dir}/link1-4242-hq-worker-%N.log",
                  "worker start --server-dir", "--cpus 2"]:
         assert part in srun
     assert "hq workers on the other nodes: srun exit" in out  # the step ended
@@ -554,7 +558,7 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
     lines = cli.describe(spec)
     assert lines[0] == "checks passed: run on test, not started (no restart.toml)"
     assert lines[-1].startswith("would submit link 1 of 5: sbatch --parsable")
-    assert not spec.dir.exists() and project.calls("sbatch") == []  # nothing written
+    assert not spec.gutsrun_dir.exists() and project.calls("sbatch") == []  # nothing written
 
     (rundir / "gutsrun.toml").write_text('site = "test"\ntime = "00:20:00"\n')
     assert cli.make_spec(rundir, cli.Config(), root=project.root)[1] == "from gutsrun.toml"
@@ -571,7 +575,7 @@ def test_unset_settings_take_the_defaults_of_spec_and_infretisrun(project):
     (rundir / "infretis.toml").write_text("")
     (rundir / "gutsrun.toml").write_text('site = "test"\ntime = "00:10:00"\n')
     spec, _ = cli.make_spec(rundir, cli.Config(), root=project.root)
-    defaults = {f.name: f.default for f in dataclasses.fields(Spec)}
+    defaults = {f.name: f.default for f in dataclasses.fields(ChainSpec)}
     assert (spec.links, spec.margin, spec.nodes, spec.constraint) == (
         defaults["links"], defaults["margin"], defaults["nodes"], defaults["constraint"])
     assert spec.args == dataclasses.asdict(InfretisRun())
@@ -587,7 +591,7 @@ def test_unset_settings_take_the_defaults_of_spec_and_infretisrun(project):
 def test_status_exit_code_says_whether_the_chain_is_active(project, monkeypatch, capsys):
     spec = project.make_spec()
     project.use_fakes(monkeypatch, squeue="1001 PENDING 0:00 (None)")
-    start(spec)
+    start_chain(spec)
     with pytest.raises(SystemExit) as stopped:
         cli.main(["status", str(project.rundir)])
     assert stopped.value.code == cli.EXIT_ACTIVE
@@ -607,9 +611,9 @@ def test_status_exit_code_says_whether_the_chain_is_active(project, monkeypatch,
 
 
 def test_bench_workload_imports_from_bench(project):
-    spec = Spec(rundir=str(project.rundir), site="test", name="b", workload="chain:BenchRun",
-                time="00:05:00", pythonpath=[str(REPO / "bench")],
-                args={"example": "ex", "runner": "bare"}, root=str(project.root))
+    spec = ChainSpec(rundir=str(project.rundir), site="test", name="b", workload="chain:BenchRun",
+                     time="00:05:00", pythonpath=[str(REPO / "bench")],
+                     args={"example": "ex", "runner": "bare"}, root=str(project.root))
     run = spec.make_workload()
     assert not run.needs_hq
     run.before_link(project.rundir, 2)  # no restart.toml yet: nothing to back up

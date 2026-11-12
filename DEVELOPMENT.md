@@ -296,7 +296,7 @@ To run a link without Slurm, e.g. on the laptop, `bench/chain.py
 --no-submit` prepares the run and its chain and prints the spec's path;
 then `GUTSRUN_CORES=4 .venv/bin/python -m
 gutsrun.chain link <spec> 1` runs link 1 here (inside `nix develop` for hq).
-The tests do the same through `start(spec, submit_first=False)`.
+The tests do the same through `start_chain(spec, submit_first=False)`.
 
 ## Tests
 

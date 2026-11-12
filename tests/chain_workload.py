@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from gutsrun.chain import Progress, StateError
+from gutsrun.chain import RunProgress, StateError
 
 
 @dataclass
@@ -30,15 +30,15 @@ class Counter:
     crash: bool = False
     workers: int = 1
 
-    def progress(self, rundir: Path) -> Progress:
+    def progress(self, rundir: Path) -> RunProgress:
         path = rundir / "state.json"
         if not path.exists():
-            return Progress(False, f"step 0 of {self.steps}")
+            return RunProgress(False, f"step 0 of {self.steps}")
         try:
             step = json.loads(path.read_text())["step"]
         except (OSError, ValueError, KeyError) as e:
             raise StateError(f"state.json in {rundir} does not parse ({e})") from e
-        return Progress(step >= self.steps, f"step {step} of {self.steps}")
+        return RunProgress(step >= self.steps, f"step {step} of {self.steps}")
 
     def before_link(self, rundir: Path, link: int) -> None:
         (rundir / f"before{link}").touch()

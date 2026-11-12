@@ -21,7 +21,15 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from gutsrun.chain import ROOT, ChainError, Spec, StateError, check_time, setup_logging, start
+from gutsrun.chain import (
+    ROOT,
+    ChainError,
+    ChainSpec,
+    StateError,
+    check_walltime_exceeds_margin,
+    setup_logging,
+    start_chain,
+)
 from gutsrun.site import SiteError
 from gutsrun_infretis.chain import InfretisRun
 
@@ -84,18 +92,18 @@ def main() -> None:
     name = args.name or f"{date.today()}-{args.case}-{args.runner}"
     rundir = ROOT / "runs" / args.site / name
     example = str(ROOT / CASES[args.case])
-    spec = Spec(rundir=str(rundir), site=args.site, name=name,
-                workload="chain:BenchRun", pythonpath=[str(BENCH)],
-                args={"example": example, "runner": args.runner,
-                      "cores_per_task": args.cores_per_task},
-                time=args.time, margin=args.margin, links=args.links, nodes=args.nodes)
+    spec = ChainSpec(rundir=str(rundir), site=args.site, name=name,
+                     workload="chain:BenchRun", pythonpath=[str(BENCH)],
+                     args={"example": example, "runner": args.runner,
+                           "cores_per_task": args.cores_per_task},
+                     time=args.time, margin=args.margin, links=args.links, nodes=args.nodes)
     try:
-        check_time(spec)  # before preparing the run
+        check_walltime_exceeds_margin(spec)  # before preparing the run
         rundir.parent.mkdir(parents=True, exist_ok=True)
         bare_run.prepare(argparse.Namespace(
             example=Path(example), rundir=rundir, workers=args.workers, steps=args.steps,
             seed=None, wmdrun=None, cores_per_worker=1, set=args.set))
-        print(start(spec, submit_first=not args.no_submit))
+        print(start_chain(spec, submit_first=not args.no_submit))
     except (ChainError, SiteError, StateError) as e:
         sys.exit(str(e))
 

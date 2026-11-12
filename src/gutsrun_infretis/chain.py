@@ -34,19 +34,19 @@ from typing import Any, get_args
 from gutsrun.chain import (
     ROOT,
     ChainError,
-    Progress,
-    Spec,
+    ChainSpec,
+    RunProgress,
     StateError,
-    check,
-    follow,
+    chain_status,
+    check_before_start,
+    follow_chain_status,
+    link_sbatch_argv,
     load_spec,
-    sbatch_argv,
-    seconds,
+    seconds_to_slurm_walltime,
     setup_logging,
-    start,
-    status,
-    stop,
-    walltime,
+    slurm_walltime_to_seconds,
+    start_chain,
+    stop_chain,
 )
 from gutsrun.site import Site, SiteError
 
@@ -66,16 +66,16 @@ class InfretisRun:
     def needs_hq(self) -> bool:
         return True
 
-    def progress(self, rundir: Path) -> Progress:
+    def progress(self, rundir: Path) -> RunProgress:
         path = rundir / "restart.toml"
         if not path.exists():
-            return Progress(False, "not started (no restart.toml)")
+            return RunProgress(False, "not started (no restart.toml)")
         try:
             config = tomllib.loads(path.read_text())
             cstep, steps = config["current"]["cstep"], config["simulation"]["steps"]
         except (OSError, tomllib.TOMLDecodeError, KeyError) as e:
             raise StateError(f"restart.toml in {rundir} does not parse ({e})") from e
-        return Progress(cstep >= steps, f"step {cstep} of {steps}")
+        return RunProgress(cstep >= steps, f"step {cstep} of {steps}")
 
     def before_link(self, rundir: Path, link: int) -> None:
         """Hook run at the start of each link after the first; bench/chain.py
@@ -105,9 +105,9 @@ def setting(text: str) -> Any:
 class Config:
     """The user's settings for a chain, as written: gutsrun.toml's keys, which
     are also `submit`'s options. Any of them may be missing (None).
-    `make_spec` turns them into a `Spec`, the complete chain the links read;
-    a setting that is not set takes its default from there (`Spec` for the
-    chain's settings, `InfretisRun` for the moves')."""
+    `make_spec` turns them into a `ChainSpec`, the complete chain the links
+    read; a setting that is not set takes its default from there
+    (`ChainSpec` for the chain's settings, `InfretisRun` for the moves')."""
 
     site: str | None = setting("sites/<site>.toml in the gutsrun checkout (required)")
     name: str | None = setting("label for the Slurm job names (default: the directory's name)")
@@ -127,7 +127,7 @@ class Config:
 
 
 SETTINGS = [f.name for f in dataclasses.fields(Config)]  # gutsrun.toml's keys
-CHAIN_SETTINGS = ["links", "margin", "nodes", "constraint"]  # passed on to Spec
+CHAIN_SETTINGS = ["links", "margin", "nodes", "constraint"]  # passed on to ChainSpec
 WORKLOAD_SETTINGS = [f.name for f in dataclasses.fields(InfretisRun)]  # to InfretisRun
 
 
@@ -138,11 +138,12 @@ def setting_type(key: str) -> type:
 
 
 def setting_help(key: str) -> str:
-    """--help's text for a setting, with the default it takes from `Spec` or
+    """--help's text for a setting, with the default it takes from `ChainSpec` or
     `InfretisRun` when it is not set."""
     [f] = [f for f in dataclasses.fields(Config) if f.name == key]
     text = f.metadata["help"]
-    owner = Spec if key in CHAIN_SETTINGS else InfretisRun if key in WORKLOAD_SETTINGS else None
+    owner = (ChainSpec if key in CHAIN_SETTINGS
+             else InfretisRun if key in WORKLOAD_SETTINGS else None)
     if owner is None:
         return text
     [default] = [o.default for o in dataclasses.fields(owner) if o.name == key]
@@ -168,7 +169,7 @@ def read_config(rundir: Path) -> Config:
 
 
 def make_spec(rundir: Path, options: Config,
-              root: str | Path = ROOT) -> tuple[Spec, str]:
+              root: str | Path = ROOT) -> tuple[ChainSpec, str]:
     """The chain for `rundir`, from gutsrun.toml's settings overridden by
     the command line's `options` (those set), and where its walltime came
     from, for the user. `root`: the gutsrun checkout."""
@@ -201,21 +202,21 @@ def make_spec(rundir: Path, options: Config,
         limit = site.max_walltime
         if limit is None:
             raise ChainError("no time: set `time` in gutsrun.toml or pass --time")
-        time = walltime(seconds(limit) - 60)
+        time = seconds_to_slurm_walltime(slurm_walltime_to_seconds(limit) - 60)
         source = f"just under max_walltime {limit} in sites/{config.site}.toml"
 
-    spec = Spec(rundir=str(rundir), site=config.site, name=config.name or rundir.name,
-                workload="gutsrun_infretis.chain:InfretisRun", time=time, args=asdict(run),
-                root=str(root), **chosen(CHAIN_SETTINGS))
+    spec = ChainSpec(rundir=str(rundir), site=config.site, name=config.name or rundir.name,
+                     workload="gutsrun_infretis.chain:InfretisRun", time=time, args=asdict(run),
+                     root=str(root), **chosen(CHAIN_SETTINGS))
     return spec, source
 
 
-def describe(spec: Spec) -> list[str]:
+def describe(spec: ChainSpec) -> list[str]:
     """What `submit` would do, after the checks; writes nothing."""
-    plan = check(spec)
+    plan = check_before_start(spec)
     lines = [f"checks passed: {spec.name} on {spec.site}, {plan.progress.text}"]
     lines.append(f"would submit link 1 of {spec.links}: "
-                 f"{shlex.join(sbatch_argv(spec, plan.site, 1))}")
+                 f"{shlex.join(link_sbatch_argv(spec, plan.site, 1))}")
     return lines
 
 
@@ -260,21 +261,21 @@ def main(argv: list[str] | None = None) -> None:
             if args.check:
                 print(*describe(spec), sep="\n")
             else:
-                job = start(spec)
+                job = start_chain(spec)
                 print(f"link 1: job {job}; follow it with `gutsrun-infretis status --follow`")
         elif args.command == "status":
             spec = load_spec(args.rundir)
             if args.follow:
-                follow(spec, args.interval)
+                follow_chain_status(spec, args.interval)
             else:
-                report = status(spec)
+                report = chain_status(spec)
                 if args.json:
                     print(json.dumps({**asdict(report), "lines": report.lines()}))
                 else:
                     print(*report.lines(), sep="\n")
                 sys.exit(EXIT_ACTIVE if report.active else 0)
         else:
-            print(*stop(load_spec(args.rundir)), sep="\n")
+            print(*stop_chain(load_spec(args.rundir)), sep="\n")
     except (ChainError, SiteError, StateError) as e:
         sys.exit(f"gutsrun-infretis: {e}")
 

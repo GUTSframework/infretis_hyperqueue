@@ -5,7 +5,8 @@ Generic: what runs, and how far it got, is up to a *workload* (see
 `Workload`). A chain's spec names the workload's class as
 `package.module:Class`, e.g. `gutsrun_infretis.chain:InfretisRun`, plus the
 keyword arguments to create it with. `gutsrun_infretis.chain` provides the
-`gutsrun-infretis` command, which calls `start()`, `status()` and `stop()`.
+`gutsrun-infretis` command, which calls `start_chain()`, `chain_status()` and
+`stop_chain()`.
 
 A link runs this module with the project venv's Python:
 
@@ -17,7 +18,7 @@ the shared file system.
 
 Each link:
 
-1. Stops if `stop()` was called (exit 0). Link > 1: stops if the
+1. Stops if `stop_chain()` was called (exit 0). Link > 1: stops if the
    workload's state is unreadable (exit 1) or the run is done (exit 0).
 2. Submits the next link right away with the dependency `afterany` on this
    one: Slurm starts it once this job has ended in any state (finished,
@@ -92,7 +93,7 @@ class StateError(Exception):
 
 
 @dataclass
-class Progress:
+class RunProgress:
     """How far a run got."""
 
     done: bool
@@ -108,7 +109,7 @@ class Workload(Protocol):
         """Start an HQ server and worker in each link."""
         ...
 
-    def progress(self, rundir: Path) -> Progress:
+    def progress(self, rundir: Path) -> RunProgress:
         """How far the run got: not done if it has not started; raises
         StateError if the state is there but cannot be read."""
         ...
@@ -128,7 +129,7 @@ class Workload(Protocol):
 
 
 @dataclass
-class Spec:
+class ChainSpec:
     """One chain, saved as <rundir>/.gutsrun/chain.json for its links."""
 
     rundir: str  # the run's directory, on the shared file system
@@ -145,28 +146,28 @@ class Spec:
     root: str = str(ROOT)  # project checkout: sites/, .venv, bin/
 
     @property
-    def dir(self) -> Path:
+    def gutsrun_dir(self) -> Path:
         """<rundir>/.gutsrun/, where the chain's own files go."""
         return Path(self.rundir) / ".gutsrun"
 
     @property
-    def path(self) -> Path:
-        return self.dir / "chain.json"
+    def spec_path(self) -> Path:
+        return self.gutsrun_dir / "chain.json"
 
     @property
-    def record(self) -> Path:
-        return self.dir / "links.jsonl"
+    def record_path(self) -> Path:
+        return self.gutsrun_dir / "links.jsonl"
 
     @property
     def stop_file(self) -> Path:
-        return self.dir / "stop"
+        return self.gutsrun_dir / "stop"
 
     def save(self) -> None:
         """Write the spec to `path`, for the links to read."""
-        self.path.write_text(json.dumps(asdict(self), indent=2) + "\n")
+        self.spec_path.write_text(json.dumps(asdict(self), indent=2) + "\n")
 
     @classmethod
-    def load(cls, path: str | Path) -> "Spec":
+    def load(cls, path: str | Path) -> "ChainSpec":
         return cls(**json.loads(Path(path).read_text()))
 
     def make_workload(self) -> Workload:
@@ -178,12 +179,12 @@ class Spec:
         return getattr(importlib.import_module(module), name)(**self.args)
 
 
-def load_spec(rundir: str | Path) -> Spec:
+def load_spec(rundir: str | Path) -> ChainSpec:
     """The spec of the chain last started in `rundir`."""
     path = Path(rundir) / ".gutsrun" / "chain.json"
     if not path.exists():
         raise ChainError(f"no chain was started in {rundir} ({path} is missing)")
-    return Spec.load(path)
+    return ChainSpec.load(path)
 
 
 def setup_logging() -> None:
@@ -196,7 +197,7 @@ def setup_logging() -> None:
     parent.propagate = False
 
 
-def seconds(walltime: str) -> int:
+def slurm_walltime_to_seconds(walltime: str) -> int:
     """A Slurm walltime in seconds. Slurm's formats: "M", "M:S", "H:M:S",
     "D-H", "D-H:M" and "D-H:M:S"; hours may exceed 23."""
     days, _, rest = walltime.rpartition("-")
@@ -212,19 +213,19 @@ def seconds(walltime: str) -> int:
     return int(days or 0) * 86400 + hours * 3600 + minutes * 60 + secs
 
 
-def walltime(secs: int) -> str:
+def seconds_to_slurm_walltime(secs: int) -> str:
     """Seconds as a Slurm walltime, "H:MM:SS"."""
     return f"{secs // 3600}:{secs % 3600 // 60:02d}:{secs % 60:02d}"
 
 
-def check_time(spec: Spec) -> None:
+def check_walltime_exceeds_margin(spec: ChainSpec) -> None:
     """Refuse a walltime too short to run anything before SIGTERM."""
-    if seconds(spec.time) <= spec.margin + 60:
+    if slurm_walltime_to_seconds(spec.time) <= spec.margin + 60:
         raise ChainError(f"time {spec.time} leaves no time to run before SIGTERM "
                          f"(margin {spec.margin} s, which Slurm may bring forward by 60 s)")
 
 
-def revision(root: str | Path) -> str:
+def checkout_revision(root: str | Path) -> str:
     """The project's commit, from git (`--dirty` if files differ from it);
     "unknown" outside a git clone or without git."""
     try:
@@ -238,26 +239,26 @@ def revision(root: str | Path) -> str:
 # --- the record and the queue ----------------------------------------------------------
 
 
-def note(spec: Spec, event: str, **fields: Any) -> None:
+def record_event(spec: ChainSpec, event: str, **fields: Any) -> None:
     """Append an event to the chain's record, links.jsonl, with the time it
     happened in `time`."""
     if fields.keys() & {"time", "event"}:
         raise ValueError(f"event fields may not be called time or event: {sorted(fields)}")
     entry = {"time": datetime.now().isoformat(timespec="seconds"), "event": event, **fields}
-    with open(spec.record, "a") as f:
+    with open(spec.record_path, "a") as f:
         f.write(json.dumps(entry) + "\n")
 
 
-def events(spec: Spec) -> list[dict[str, Any]]:
+def current_chain_events(spec: ChainSpec) -> list[dict[str, Any]]:
     """The record of the chain last started: events since its "chain" event."""
-    if not spec.record.exists():
+    if not spec.record_path.exists():
         return []
-    entries = [json.loads(line) for line in spec.record.read_text().splitlines() if line]
+    entries = [json.loads(line) for line in spec.record_path.read_text().splitlines() if line]
     starts = [i for i, e in enumerate(entries) if e["event"] == "chain"]
     return entries[starts[-1]:] if starts else entries
 
 
-def queue(user: str | None = None) -> dict[str, str] | None:
+def squeue_jobs(user: str | None = None) -> dict[str, str] | None:
     """The user's jobs in Slurm's queue, job id -> "STATE TIME REASON"; None
     if squeue does not answer, which is not "no jobs"."""
     try:
@@ -270,25 +271,26 @@ def queue(user: str | None = None) -> dict[str, str] | None:
             if job}
 
 
-def chain_jobs(spec: Spec) -> list[tuple[int, str]]:
+def link_jobs(spec: ChainSpec) -> list[tuple[int, str]]:
     """(link, job id) of every link submitted or started in the chain, in order."""
-    keys = [(e["link"], e["job"]) for e in events(spec) if e["event"] in ("submitted", "started")]
+    keys = [(e["link"], e["job"]) for e in current_chain_events(spec)
+            if e["event"] in ("submitted", "started")]
     return list(dict.fromkeys(keys))
 
 
 # --- submitting, status, stopping ------------------------------------------------------
 
 
-def sbatch_argv(spec: Spec, site: Site, link: int, after: str | None = None) -> list[str]:
+def link_sbatch_argv(spec: ChainSpec, site: Site, link: int, after: str | None = None) -> list[str]:
     """The sbatch command for one link, `after` the job it follows. `exec`
     makes Python the job's main process, which gets Slurm's signal."""
     python = Path(spec.root) / ".venv" / "bin" / "python"
     command = (f"exec {shlex.quote(str(python))} -m gutsrun.chain link "
-               f"{shlex.quote(str(spec.path))} {link}")
+               f"{shlex.quote(str(spec.spec_path))} {link}")
     argv = ["sbatch", "--parsable", f"--job-name=gutsrun-{spec.name}-{link}",
             f"--partition={site.partition}", f"--nodes={spec.nodes}", f"--time={spec.time}",
             f"--signal=B:TERM@{spec.margin}", f"--chdir={spec.rundir}",
-            f"--output={spec.dir / f'link{link}-%j.out'}", "--exclusive"]
+            f"--output={spec.gutsrun_dir / f'link{link}-%j.out'}", "--exclusive"]
     if spec.constraint:
         argv.append(f"--constraint={spec.constraint}")
     if after:
@@ -296,39 +298,40 @@ def sbatch_argv(spec: Spec, site: Site, link: int, after: str | None = None) -> 
     return [*argv, f"--wrap={command}"]
 
 
-def submit(spec: Spec, site: Site, link: int, after: str | None = None) -> str:
+def submit_link(spec: ChainSpec, site: Site, link: int, after: str | None = None) -> str:
     """Submit one link and note it in the record; returns its job id."""
-    out = subprocess.run(sbatch_argv(spec, site, link, after), capture_output=True,
+    out = subprocess.run(link_sbatch_argv(spec, site, link, after), capture_output=True,
                          text=True, check=True).stdout
     job = out.strip().split(";")[0]  # --parsable prints "<id>" or "<id>;<cluster>"
-    note(spec, "submitted", link=link, job=job)
+    record_event(spec, "submitted", link=link, job=job)
     return job
 
 
 @dataclass
-class Plan:
-    """What `check()` found: everything `start()` needs to go ahead."""
+class StartPlan:
+    """What `check_before_start()` found: everything `start_chain()` needs to
+    go ahead."""
 
     site: Site
-    progress: Progress  # the run's, before the chain
+    progress: RunProgress  # the run's, before the chain
     revision: str  # of the gutsrun checkout
 
 
-def check(spec: Spec, submitting: bool = True) -> Plan:
-    """Everything `start()` checks, without writing anything. Raises
+def check_before_start(spec: ChainSpec, submitting: bool = True) -> StartPlan:
+    """Everything `start_chain()` checks, without writing anything. Raises
     ChainError, or StateError if the run's state is unreadable. A run
     directory can take a new chain once the last one has no jobs left in
     the queue. `submitting=False` skips the check for sbatch, for a first
     link run by hand."""
     root = Path(spec.root)
     site = Site(root, spec.site)
-    check_time(spec)
+    check_walltime_exceeds_margin(spec)
     if submitting and not shutil.which("sbatch"):
         raise ChainError("no sbatch on PATH; submit from the cluster's login node")
     if not Path(spec.rundir).is_dir():
         raise ChainError(f"no run directory {spec.rundir}")
-    if submitted := [e["job"] for e in events(spec) if e["event"] == "submitted"]:
-        queued = queue()
+    if submitted := [e["job"] for e in current_chain_events(spec) if e["event"] == "submitted"]:
+        queued = squeue_jobs()
         if queued is None:
             raise ChainError("squeue does not answer, so it is unclear whether the chain "
                              f"already started in {spec.rundir} still runs")
@@ -348,15 +351,15 @@ def check(spec: Spec, submitting: bool = True) -> Plan:
         raise ChainError(f"the run in {spec.rundir} is done: {progress.text}")
     if workload.needs_hq and not ((root / "bin" / "hq").exists() or shutil.which("hq")):
         raise ChainError("no hq in bin/ or on PATH; run scripts/get-hq.sh")
-    rev = revision(root)
+    rev = checkout_revision(root)
     if rev == "unknown":
         log.warning("warning: not a git clone; the runs will not record which code "
                     "they ran")
-    return Plan(site, progress, rev)
+    return StartPlan(site, progress, rev)
 
 
-def start(spec: Spec, *, submit_first: bool = True) -> str:
-    """Check (see `check()`) and save a new chain in an existing run
+def start_chain(spec: ChainSpec, *, submit_first: bool = True) -> str:
+    """Check (see `check_before_start()`) and save a new chain in an existing run
     directory and submit its first link; returns the job id. With
     `submit_first=False`, returns the spec's path instead, to run
     `python -m gutsrun.chain link <spec> 1` by hand.
@@ -364,27 +367,27 @@ def start(spec: Spec, *, submit_first: bool = True) -> str:
     The spec is saved before link 1 is submitted, since link 1 may start
     and read it at once. If sbatch refuses link 1, the record says so and
     ChainError says why; `status` then reports this chain, with no link."""
-    plan = check(spec, submitting=submit_first)
-    spec.dir.mkdir(exist_ok=True)
+    plan = check_before_start(spec, submitting=submit_first)
+    spec.gutsrun_dir.mkdir(exist_ok=True)
     spec.stop_file.unlink(missing_ok=True)
     spec.save()
     # Noted before submitting: link 1 may start, and note "started", at once.
-    note(spec, "chain", name=spec.name, site=spec.site, walltime=spec.time, links=spec.links,
-         revision=plan.revision, progress=plan.progress.text)
+    record_event(spec, "chain", name=spec.name, site=spec.site, walltime=spec.time,
+                 links=spec.links, revision=plan.revision, progress=plan.progress.text)
     if not submit_first:
-        return str(spec.path)
+        return str(spec.spec_path)
     try:
-        return submit(spec, plan.site, 1)
+        return submit_link(spec, plan.site, 1)
     except (subprocess.CalledProcessError, OSError) as e:
         error = (e.stderr or "").strip() if isinstance(e, subprocess.CalledProcessError) else ""
         error = error or str(e)
-        note(spec, "not submitted", link=1, error=error)
+        record_event(spec, "not submitted", link=1, error=error)
         raise ChainError(f"sbatch refused link 1, nothing submitted: {error}") from e
 
 
 @dataclass
-class Report:
-    """The state of a chain, from `status()`."""
+class StatusReport:
+    """The state of a chain, from `chain_status()`."""
 
     progress: str  # the run's, e.g. "step 526 of 1000"
     links: list[str]  # one line per link: its state in the queue, or how it ended
@@ -396,7 +399,7 @@ class Report:
         return [self.progress, *self.links] + ([f"chain over: {self.over}"] if self.over else [])
 
 
-def why_over(spec: Spec, record: list[dict[str, Any]]) -> str:
+def why_chain_is_over(spec: ChainSpec, record: list[dict[str, Any]]) -> str:
     """Why a chain with no job left is over, from its record: the run is
     done, the chain was stopped, or else what its last link recorded."""
     ended = {(e["link"], e["job"]): e["result"] for e in record if e["event"] == "ended"}
@@ -408,7 +411,7 @@ def why_over(spec: Spec, record: list[dict[str, Any]]) -> str:
     if not jobs:
         return "no link was submitted"
     link, job = jobs[-1]
-    log_file = spec.dir / f"link{link}-{job}.out"
+    log_file = spec.gutsrun_dir / f"link{link}-{job}.out"
     result = ended.get((link, job))
     if result == STOPPED_BY_SIGNAL:
         return f"link {link} stopped at the walltime, the last link; `submit` again to continue"
@@ -417,7 +420,7 @@ def why_over(spec: Spec, record: list[dict[str, Any]]) -> str:
     return f"link {link}: {result}; see {log_file}"
 
 
-def status(spec: Spec) -> Report:
+def chain_status(spec: ChainSpec) -> StatusReport:
     """A report on the chain: the run's progress, each link's state, and
     whether and why the chain is over."""
     try:
@@ -425,13 +428,13 @@ def status(spec: Spec) -> Report:
                     f"{spec.make_workload().progress(Path(spec.rundir)).text}")
     except StateError as e:
         progress = f"{spec.name} ({spec.site}): {e}"
-    record = events(spec)
+    record = current_chain_events(spec)
     ended = {(e["link"], e["job"]): e for e in record if e["event"] == "ended"}
-    queued = queue()
+    queued = squeue_jobs()
     links = [] if queued is not None else ["(squeue does not answer)"]
     active = queued is None
     previous: str | None = None  # the result the link before recorded
-    for link, job in chain_jobs(spec):
+    for link, job in link_jobs(spec):
         head = f"link {link:>2}  job {job:<10}"
         result = ended[(link, job)]["result"] if (link, job) in ended else None
         if queued and job in queued:
@@ -445,16 +448,16 @@ def status(spec: Spec) -> Report:
         else:
             links.append(f"{head} not in the queue, no end recorded")
         previous = result
-    over = why_over(spec, record) if not active and record else None
-    return Report(progress, links, over, active)
+    over = why_chain_is_over(spec, record) if not active and record else None
+    return StatusReport(progress, links, over, active)
 
 
-def follow(spec: Spec, interval: float = 30) -> None:
+def follow_chain_status(spec: ChainSpec, interval: float = 30) -> None:
     """Print the report whenever it changes, until no job of the chain is
     left."""
     shown: list[str] | None = None
     while True:
-        report = status(spec)
+        report = chain_status(spec)
         if report.lines() != shown:
             print(f"--- {datetime.now():%H:%M:%S}", *report.lines(), sep="\n", flush=True)
             shown = report.lines()
@@ -463,17 +466,17 @@ def follow(spec: Spec, interval: float = 30) -> None:
         time.sleep(interval)
 
 
-def stop(spec: Spec) -> list[str]:
+def stop_chain(spec: ChainSpec) -> list[str]:
     """Stop the chain: no further link starts, queued links are cancelled,
     and a running link gets SIGTERM, which its workload handles as at the
     walltime. Returns what it did, one line each."""
     spec.stop_file.touch()
-    queued = queue()
+    queued = squeue_jobs()
     if queued is None:
         raise ChainError("squeue does not answer; no link will start, but a running "
                          "one keeps running")
     done = []
-    for link, job in chain_jobs(spec):
+    for link, job in link_jobs(spec):
         if job not in queued:
             continue
         if queued[job].startswith("RUNNING"):
@@ -489,7 +492,7 @@ def stop(spec: Spec) -> list[str]:
 # --- one link --------------------------------------------------------------------------
 
 
-class Forwarder:
+class SignalForwarder:
     """Passes SIGTERM and SIGINT on to the workload once it runs; one that
     arrives earlier keeps the workload from starting."""
 
@@ -517,20 +520,20 @@ def run_link(spec_path: str | Path, link: int) -> int:
     """Run link number `link` of a chain (the steps in the module docstring);
     returns the job's exit code."""
     started = time.monotonic()
-    forwarder = Forwarder()
-    spec = Spec.load(spec_path)
+    forwarder = SignalForwarder()
+    spec = ChainSpec.load(spec_path)
     rundir = Path(spec.rundir)
     site = Site(spec.root, spec.site)
     workload = spec.make_workload()
     job = os.environ.get("SLURM_JOB_ID", f"nojob-{os.getpid()}")
-    log_prefix = str(spec.dir / f"link{link}-{job}")
+    log_prefix = str(spec.gutsrun_dir / f"link{link}-{job}")
     host = socket.gethostname()
     log.info(f"link {link}/{spec.links} of {spec.name} on {host}, job {job}, "
-             f"code {revision(spec.root)}")
-    note(spec, "started", link=link, job=job, host=host)
+             f"code {checkout_revision(spec.root)}")
+    record_event(spec, "started", link=link, job=job, host=host)
 
     def end(code: int, result: str, progress: str) -> int:
-        note(spec, "ended", link=link, job=job, exit=code, result=result, progress=progress)
+        record_event(spec, "ended", link=link, job=job, exit=code, result=result, progress=progress)
         return code
 
     next_job = None
@@ -561,7 +564,7 @@ def run_link(spec_path: str | Path, link: int) -> int:
 
         if link < spec.links and shutil.which("sbatch"):
             try:
-                next_job = submit(spec, site, link + 1, after=job)
+                next_job = submit_link(spec, site, link + 1, after=job)
                 log.info(f"next link: job {next_job} (afterany:{job})")
             except subprocess.CalledProcessError as e:
                 log.info(f"could not submit the next link ({e.stderr.strip()}); "
@@ -576,7 +579,7 @@ def run_link(spec_path: str | Path, link: int) -> int:
                     log.info(f"site setup: {site.setup!r}")
                     env = setup_env(site.setup, env)
                 if workload.needs_hq:
-                    server = spec.dir / f"hq-{job}"
+                    server = spec.gutsrun_dir / f"hq-{job}"
                     hq_dir = stack.enter_context(hq.server_and_worker(
                         spec.root, server, log_prefix, site.cores, env))
                     if spec.nodes > 1:
@@ -615,7 +618,7 @@ def run_link(spec_path: str | Path, link: int) -> int:
                 return end(0, "stopped by request", progress.text)
             then = (f"link {link + 1} continues" if next_job
                     else f"no further link (links={spec.links})")
-            ran = walltime(round(time.monotonic() - started))
+            ran = seconds_to_slurm_walltime(round(time.monotonic() - started))
             log.info(f"{STOPPED_BY_SIGNAL} after {ran} of {spec.time}; "
                      f"run: {progress.text}; {then}")
             return end(0, STOPPED_BY_SIGNAL, progress.text)
