@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import tomllib
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -231,6 +232,9 @@ def test_start_submits_link_1_with_site_options(project, monkeypatch):
     gpu.constraint = "A4000"
     assert "--constraint=A4000" in sbatch_argv(gpu, Site(project.root, "test"), 1)
     assert [e["event"] for e in events(spec)] == ["chain", "submitted"]
+    first = events(spec)[0]
+    assert first["walltime"] == "00:05:00"
+    datetime.fromisoformat(first["time"])  # when the chain started, not its walltime
 
 
 def test_start_refusals(project):

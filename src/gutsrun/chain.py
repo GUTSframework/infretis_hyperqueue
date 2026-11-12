@@ -239,7 +239,10 @@ def revision(root: str | Path) -> str:
 
 
 def note(spec: Spec, event: str, **fields: Any) -> None:
-    """Append an event to the chain's record, links.jsonl."""
+    """Append an event to the chain's record, links.jsonl, with the time it
+    happened in `time`."""
+    if fields.keys() & {"time", "event"}:
+        raise ValueError(f"event fields may not be called time or event: {sorted(fields)}")
     entry = {"time": datetime.now().isoformat(timespec="seconds"), "event": event, **fields}
     with open(spec.record, "a") as f:
         f.write(json.dumps(entry) + "\n")
@@ -366,7 +369,7 @@ def start(spec: Spec, *, submit_first: bool = True) -> str:
     spec.stop_file.unlink(missing_ok=True)
     spec.save()
     # Noted before submitting: link 1 may start, and note "started", at once.
-    note(spec, "chain", name=spec.name, site=spec.site, time=spec.time, links=spec.links,
+    note(spec, "chain", name=spec.name, site=spec.site, walltime=spec.time, links=spec.links,
          revision=plan.revision, progress=plan.progress.text)
     if not submit_first:
         return str(spec.path)
