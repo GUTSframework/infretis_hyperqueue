@@ -41,7 +41,7 @@ class Site:
         self.setup: str | None = data.get("environment", {}).get("setup")
 
 
-def setup_env(setup: str, env: dict[str, str]) -> dict[str, str]:
+def env_after_site_setup(setup: str, env: dict[str, str]) -> dict[str, str]:
     """The environment after running the site's `setup` lines (e.g. `module
     load`) in bash, starting from `env`. Their output goes to the link's log."""
     script = f"{{\n{setup}\n}} >&2 || exit 1\nenv -0"

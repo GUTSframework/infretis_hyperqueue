@@ -70,7 +70,7 @@ from types import FrameType
 from typing import Any, Protocol
 
 from gutsrun import hq
-from gutsrun.site import Site, SiteError, setup_env
+from gutsrun.site import Site, SiteError, env_after_site_setup
 
 EXIT_STOPPED = 3
 # A link's result when a signal stopped its workload and the next link may
@@ -577,7 +577,7 @@ def run_link(spec_path: str | Path, link: int) -> int:
                 env = dict(os.environ)
                 if site.setup:
                     log.info(f"site setup: {site.setup!r}")
-                    env = setup_env(site.setup, env)
+                    env = env_after_site_setup(site.setup, env)
                 if workload.needs_hq:
                     server = spec.gutsrun_dir / f"hq-{job}"
                     hq_dir = stack.enter_context(hq.running_server_and_worker(

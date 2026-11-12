@@ -38,7 +38,7 @@ from gutsrun.chain import (
     stop_chain,
     why_chain_is_over,
 )
-from gutsrun.site import Site, SiteError, setup_env
+from gutsrun.site import Site, SiteError, env_after_site_setup
 from gutsrun_infretis.chain import InfretisRun
 
 REPO = Path(__file__).resolve().parent.parent
@@ -186,8 +186,8 @@ def test_site_refusals(project):
         Site(project.root, "nosuch")
 
 
-def test_setup_env_keeps_values_with_newlines_and_equals_signs():
-    env = setup_env('export A="x=1\ny"; unset B', {"PATH": os.environ["PATH"], "B": "1"})
+def test_env_after_site_setup_keeps_values_with_newlines_and_equals_signs():
+    env = env_after_site_setup('export A="x=1\ny"; unset B', {"PATH": os.environ["PATH"], "B": "1"})
     assert env["A"] == "x=1\ny" and "B" not in env
 
 
