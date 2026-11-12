@@ -150,7 +150,7 @@ def setting_help(key: str) -> str:
     return text if default is None else f"{text} (default: {default})"
 
 
-def read_config(rundir: Path) -> Config:
+def read_gutsrun_toml(rundir: Path) -> Config:
     """gutsrun.toml in `rundir`, checked against `Config`; nothing set
     without one."""
     path = rundir / "gutsrun.toml"
@@ -176,7 +176,7 @@ def make_spec(rundir: Path, options: Config,
     rundir = rundir.resolve()
     if not (rundir / "infretis.toml").exists():
         raise ChainError(f"no infretis.toml in {rundir}")
-    from_file = read_config(rundir)
+    from_file = read_gutsrun_toml(rundir)
     config = dataclasses.replace(
         from_file, **{k: v for k, v in asdict(options).items() if v is not None})
     if config.site is None:
@@ -211,7 +211,7 @@ def make_spec(rundir: Path, options: Config,
     return spec, source
 
 
-def describe(spec: ChainSpec) -> list[str]:
+def describe_submit(spec: ChainSpec) -> list[str]:
     """What `submit` would do, after the checks; writes nothing."""
     plan = check_before_start(spec)
     lines = [f"checks passed: {spec.name} on {spec.site}, {plan.progress.text}"]
@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> None:
                                      Config(**{key: getattr(args, key) for key in SETTINGS}))
             print(f"walltime per link: {spec.time} ({source})")
             if args.check:
-                print(*describe(spec), sep="\n")
+                print(*describe_submit(spec), sep="\n")
             else:
                 job = start_chain(spec)
                 print(f"link 1: job {job}; follow it with `gutsrun-infretis status --follow`")

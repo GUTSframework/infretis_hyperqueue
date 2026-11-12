@@ -555,7 +555,7 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
     assert spec.args == {"cores_per_task": 2, "gpus_per_task": 1, "time_request": "30m"}
     assert spec.workload == "gutsrun_infretis.chain:InfretisRun"
 
-    lines = cli.describe(spec)
+    lines = cli.describe_submit(spec)
     assert lines[0] == "checks passed: run on test, not started (no restart.toml)"
     assert lines[-1].startswith("would submit link 1 of 5: sbatch --parsable")
     assert not spec.gutsrun_dir.exists() and project.calls("sbatch") == []  # nothing written
