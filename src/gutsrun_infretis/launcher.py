@@ -73,8 +73,8 @@ log = logging.getLogger("gutsrun_infretis")
 EXECUTORS: list[TaskExecutor] = []
 
 
-def make_factory(make_backend: Callable[[], Backend], spool_dir: str,
-                 resource_dict: dict[str, Any]) -> Callable[..., TaskExecutor]:
+def make_executor_factory(make_backend: Callable[[], Backend], spool_dir: str,
+                          resource_dict: dict[str, Any]) -> Callable[..., TaskExecutor]:
     """infretis's `executor_factory`: takes ProcessPoolExecutor's arguments
     and returns a TaskExecutor, which runs infretis's initializer before
     every call (each in a fresh task process)."""
@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         return hq.HQBackend(server_dir, time_request=args.time_request, hq_bin=hq_bin)
 
     resources = {"cores": args.cores_per_task, "gpus": args.gpus_per_task, "cwd": os.getcwd()}
-    factory = make_factory(make_backend, args.spool, resources)
+    factory = make_executor_factory(make_backend, args.spool, resources)
 
     own_hq = contextlib.ExitStack()
     try:
