@@ -21,7 +21,9 @@
 set -euo pipefail
 
 if [ "${1:-}" = job ]; then
-    # Inside the job: the batch shell, which `B:` sends the signal to.
+    # Inside the job, as the batch shell itself (`exec` in --wrap below):
+    # `B:` signals only the batch shell, and a child of it would be killed
+    # with it before its trap runs.
     out="$2/$SLURM_JOB_ID"
     now() { date +%s.%N; }
     echo "start $(now)" >> "$out.log"
@@ -45,5 +47,5 @@ script="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 for _ in $(seq "$count"); do
     sbatch --parsable --job-name=probe-signal --time="$time" --signal=B:TERM@90 \
         --nodes=1 --ntasks=1 --cpus-per-task=1 --output="$outdir/%j.out" "$@" \
-        --wrap="bash '$script' job '$outdir'"
+        --wrap="exec bash '$script' job '$outdir'"
 done
