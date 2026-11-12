@@ -60,6 +60,7 @@ from infretis.setup import setup_config
 from gutsrun import TaskExecutor, hq
 from gutsrun.chain import ROOT
 from gutsrun.executor import Backend
+from gutsrun_infretis.workload import InfretisRun
 
 TESTED_COMMIT = "2502487"  # the fork's commit in requirements.txt
 EXIT_DONE, EXIT_STOPPED, EXIT_REFUSED = 0, 3, 4
@@ -162,10 +163,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="the HQ server to run moves on (default: $HQ_SERVER_DIR, else "
                         "a server of the launcher's own)")
     p.add_argument("--spool", default="gutsrun-spool")
-    p.add_argument("--cores-per-task", type=int, default=1)
-    p.add_argument("--gpus-per-task", type=int, default=0)
-    p.add_argument("--time-request", help="start a move only on a worker with this "
-                                          "much time left, e.g. 30m (default: off)")
+    defaults = InfretisRun()  # the same defaults as gutsrun.toml's settings
+    p.add_argument("--cores-per-task", type=int, default=defaults.cores_per_task,
+                   help="cores per move (default: %(default)s)")
+    p.add_argument("--gpus-per-task", type=int, default=defaults.gpus_per_task,
+                   help="GPUs per move (default: %(default)s)")
+    p.add_argument("--time-request", default=defaults.time_request,
+                   help="start a move only on a worker with this much time left, "
+                        "e.g. 30m (default: any worker)")
     args = p.parse_args(argv)
 
     # Our own file; infretis logs to the root logger (sim.log, worker logs).
