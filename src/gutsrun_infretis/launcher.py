@@ -193,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
                 sys.exit(f"--cores-per-task is {args.cores_per_task}, but this machine "
                          f"lets the launcher use only {cores} cores")
             server_dir = str(Path("gutsrun-hq").resolve())
-            hq_bin = str(Path(own_hq.enter_context(hq.server_and_worker(
+            hq_bin = str(Path(own_hq.enter_context(hq.running_server_and_worker(
                 ROOT, Path(server_dir), "gutsrun", cores))) / "hq")
             log.info("own hq server in %s, worker with %d cores", server_dir, cores)
         if args.gpus_per_task:

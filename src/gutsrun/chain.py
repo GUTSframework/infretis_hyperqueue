@@ -580,10 +580,10 @@ def run_link(spec_path: str | Path, link: int) -> int:
                     env = setup_env(site.setup, env)
                 if workload.needs_hq:
                     server = spec.gutsrun_dir / f"hq-{job}"
-                    hq_dir = stack.enter_context(hq.server_and_worker(
+                    hq_dir = stack.enter_context(hq.running_server_and_worker(
                         spec.root, server, log_prefix, site.cores, env))
                     if spec.nodes > 1:
-                        stack.enter_context(hq.workers_elsewhere(
+                        stack.enter_context(hq.running_workers_on_other_nodes(
                             spec.root, server, log_prefix, spec.nodes - 1, site.cores, env))
                     env["HQ_SERVER_DIR"] = str(server)
                     env["PATH"] = os.pathsep.join([hq_dir, env.get("PATH", "")])

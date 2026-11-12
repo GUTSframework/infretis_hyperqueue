@@ -30,7 +30,7 @@ class HQError(Exception):
     """No suitable hq binary, the server did not start, or hq refused a call."""
 
 
-def binary(root: str | Path) -> str:
+def find_hq_binary(root: str | Path) -> str:
     """The hq binary: bin/hq in the checkout, else the one on PATH, checked
     to be VERSION."""
     bundled = Path(root) / "bin" / "hq"
@@ -69,8 +69,8 @@ def worker_gpus(server_dir: str | Path, hq_bin: str | None = None,
 
 
 @contextlib.contextmanager
-def server_and_worker(root: str | Path, server: Path, log_prefix: str, cores: int,
-                      env: dict[str, str] | None = None) -> Iterator[str]:
+def running_server_and_worker(root: str | Path, server: Path, log_prefix: str, cores: int,
+                              env: dict[str, str] | None = None) -> Iterator[str]:
     """Run an HQ server and one worker on this node for the `with` block;
     yields the directory of the hq binary. The worker, and so its tasks,
     runs in `env`. Stops both and removes the server directory when the
@@ -82,7 +82,7 @@ def server_and_worker(root: str | Path, server: Path, log_prefix: str, cores: in
 
     Both run in a session of their own: a Ctrl-C in the terminal goes to
     the caller, which stops its tasks before the `with` block stops HQ."""
-    hq = binary(root)
+    hq = find_hq_binary(root)
     shutil.rmtree(server, ignore_errors=True)
     server.mkdir(parents=True)
     access = server / "access.json"
@@ -121,14 +121,14 @@ def server_and_worker(root: str | Path, server: Path, log_prefix: str, cores: in
 
 
 @contextlib.contextmanager
-def workers_elsewhere(root: str | Path, server: Path, log_prefix: str, others: int,
-                      cores: int, env: dict[str, str] | None = None) -> Iterator[None]:
+def running_workers_on_other_nodes(root: str | Path, server: Path, log_prefix: str, others: int,
+                                   cores: int, env: dict[str, str] | None = None) -> Iterator[None]:
     """An HQ worker on each of the job's `others` other nodes for the `with`
     block, in one srun step, in `env` (srun passes the environment on to the
     step); each logs to `<log_prefix>-hq-worker-<node>.log`. When the block
     ends, stops the HQ server, which ends the workers, and then the step:
     srun answers SIGTERM by killing whatever of it is left."""
-    hq = binary(root)
+    hq = find_hq_binary(root)
     # --relative=1: the nodes after the first, which runs this link.
     # --cpus-per-task: a step gets one CPU per task unless told otherwise,
     # and the worker and its tasks would be confined to it.
