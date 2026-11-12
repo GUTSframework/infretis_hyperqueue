@@ -1,7 +1,7 @@
 """Report on scripts/probe-signal-timing.sh's jobs: per job, how long before
 its planned end each TERM came, and when it was killed.
 
-    python3 scripts/probe-signal-timing-report.py <outdir>
+    .venv/bin/python scripts/probe-signal-timing-report.py <outdir>
 
 Times are seconds before the planned end (StartTime + TimeLimit, from
 Slurm, to the second); negative is after it. The warning was asked for 90 s
@@ -33,7 +33,7 @@ def main(outdir: Path) -> None:
             elif "=" in line:
                 key, _, value = line.partition("=")
                 fields[key] = value
-        start = datetime.fromisoformat(fields["StartTime"]).timestamp()
+        start = datetime.strptime(fields["StartTime"], "%Y-%m-%dT%H:%M:%S").timestamp()
         end = start + time_limit_seconds(fields["TimeLimit"])
         hb = log.with_suffix(".hb")
         killed = f"{end - float(hb.read_text()):10.1f}" if hb.exists() else "         ?"

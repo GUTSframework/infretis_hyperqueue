@@ -17,7 +17,7 @@
 # margin. Then, once all have ended (the second TERM is the walltime's; the
 # KILL follows KillWait later):
 #
-#   python3 scripts/probe-signal-timing-report.py <outdir>
+#   .venv/bin/python scripts/probe-signal-timing-report.py <outdir>
 set -euo pipefail
 
 if [ "${1:-}" = job ]; then
