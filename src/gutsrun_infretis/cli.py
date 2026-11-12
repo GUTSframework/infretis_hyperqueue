@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, get_args, get_type_hints
 
 from gutsrun.chain import (
+    FOLLOW_INTERVAL,
     ROOT,
     ChainError,
     ChainSpec,
@@ -50,6 +51,8 @@ from gutsrun.site import Site, SiteError
 from gutsrun_infretis.workload import InfretisRun
 
 EXIT_ACTIVE = 10  # `status`: some job of the chain is still queued or running
+# s: the default walltime per link stays this far under the site's max_walltime
+MAX_WALLTIME_HEADROOM = 60
 
 
 def setting(text: str) -> Any:
@@ -158,7 +161,7 @@ def make_spec(rundir: Path, options: Config,
         limit = site.max_walltime
         if limit is None:
             raise ChainError("no time: set `time` in gutsrun.toml or pass --time")
-        time = seconds_to_slurm_walltime(slurm_walltime_to_seconds(limit) - 60)
+        time = seconds_to_slurm_walltime(slurm_walltime_to_seconds(limit) - MAX_WALLTIME_HEADROOM)
         source = f"just under max_walltime {limit} in sites/{config.site}.toml"
 
     spec = ChainSpec(rundir=str(rundir), site=config.site, name=config.name or rundir.name,
@@ -202,7 +205,8 @@ def main(argv: list[str] | None = None) -> None:
                      help="print one JSON object, for scripts: progress, links (one line "
                           "each), over (null while active), active, and lines (the report "
                           "as text)")
-    stat.add_argument("--interval", type=float, default=30, help="seconds between checks")
+    stat.add_argument("--interval", type=float, default=FOLLOW_INTERVAL,
+                      help="seconds between checks (default: %(default)s)")
 
     halt = commands.add_parser("stop", help="stop the chain in the run directory")
     halt.add_argument("rundir", nargs="?", type=Path, default=Path.cwd())

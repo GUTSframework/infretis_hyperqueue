@@ -25,6 +25,11 @@ VERSION = "0.26.2"  # keep in sync with flake.nix and scripts/get-hq.sh
 
 log = logging.getLogger("gutsrun.hq")
 
+SERVER_START_TIMEOUT = 60  # s for the HQ server to write hq-current
+SERVER_START_POLL = 0.1  # s between looks for hq-current
+PROCESS_STOP_TIMEOUT = 10  # s for a stopped server or worker to exit before it is killed
+EVENT_READER_STOP_TIMEOUT = 5  # s for the event-stream thread to end at close()
+
 
 class HQError(Exception):
     """No suitable hq binary, the server did not start, or hq refused a call."""
@@ -97,11 +102,11 @@ def running_server_and_worker(root: str | Path, server: Path, log_prefix: str, c
                 [hq, "server", "start", "--server-dir", str(server), "--access-file", str(access)],
                 stdout=out, stderr=subprocess.STDOUT, start_new_session=True))
         # The server writes hq-current on this node, so no NFS cache hides it.
-        deadline = time.monotonic() + 60
+        deadline = time.monotonic() + SERVER_START_TIMEOUT
         while not (server / "hq-current").exists():
             if processes[0].poll() is not None or time.monotonic() > deadline:
                 raise HQError(f"hq server did not start; see {log_prefix}-hq-server.log")
-            time.sleep(0.1)
+            time.sleep(SERVER_START_POLL)
         with open(f"{log_prefix}-hq-worker.log", "wb") as out:
             processes.append(subprocess.Popen(
                 [hq, "worker", "start", "--server-dir", str(server), "--cpus", str(cores)],
@@ -113,7 +118,7 @@ def running_server_and_worker(root: str | Path, server: Path, log_prefix: str, c
                        capture_output=True)
         for process in processes:
             try:
-                process.wait(timeout=10)
+                process.wait(timeout=PROCESS_STOP_TIMEOUT)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
@@ -237,7 +242,7 @@ class HQBackend:
             self._run("job", "close", str(self.job))
         if self._stream.poll() is None:
             self._stream.terminate()
-        self._reader.join(timeout=5)
+        self._reader.join(timeout=EVENT_READER_STOP_TIMEOUT)
 
     def _read_events(self) -> None:
         """Turn the job's task events into (task, None | error) on `_ended`.
