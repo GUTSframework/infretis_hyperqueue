@@ -31,7 +31,7 @@ from gutsrun.chain import (
     start_chain,
 )
 from gutsrun.site import SiteError
-from gutsrun_infretis.chain import InfretisRun
+from gutsrun_infretis.workload import InfretisRun
 
 CASES = {"2d": "examples/2d_potential", "lammps": "examples/water_dissociation_lammps"}
 BENCH = Path(__file__).resolve().parent

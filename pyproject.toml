@@ -9,7 +9,7 @@ description = "Run Python calls as cluster tasks behind a standard Executor (GUT
 requires-python = ">=3.12"
 
 [project.scripts]
-gutsrun-infretis = "gutsrun_infretis.chain:main"
+gutsrun-infretis = "gutsrun_infretis.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

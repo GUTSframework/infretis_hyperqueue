@@ -18,7 +18,7 @@ import pytest
 from conftest import wait_for
 
 import gutsrun.chain as chain
-import gutsrun_infretis.chain as cli
+import gutsrun_infretis.cli as cli
 from gutsrun.chain import (
     STOPPED_BY_SIGNAL,
     ChainError,
@@ -39,7 +39,7 @@ from gutsrun.chain import (
     why_chain_is_over,
 )
 from gutsrun.site import Site, SiteError, env_after_site_setup
-from gutsrun_infretis.chain import InfretisRun
+from gutsrun_infretis.workload import InfretisRun
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -553,7 +553,7 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
     assert source == "just under max_walltime 00:15:00 in sites/test.toml"
     assert (spec.nodes, spec.constraint) == (3, "A4000")
     assert spec.args == {"cores_per_task": 2, "gpus_per_task": 1, "time_request": "30m"}
-    assert spec.workload == "gutsrun_infretis.chain:InfretisRun"
+    assert spec.workload == "gutsrun_infretis.workload:InfretisRun"
 
     lines = cli.describe_submit(spec)
     assert lines[0] == "checks passed: run on test, not started (no restart.toml)"

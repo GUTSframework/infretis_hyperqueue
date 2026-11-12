@@ -273,9 +273,9 @@ under plain infretis.
 `gutsrun.chain` is the generic chain: what one link does, step by step, is
 in its module docstring. It reads the site file through `gutsrun.site` and
 starts HQ through `gutsrun.hq`; neither imports it. A *workload* (a small class, see `Workload` there)
-says what a link runs and how far the run got; `gutsrun_infretis.chain`
-has the infretis one and the `gutsrun-infretis` command, `bench/chain.py`
-one that runs `bench/bare_run.py` with either runner. A link's own process
+says what a link runs and how far the run got; `gutsrun_infretis.workload`
+has the infretis one, `gutsrun_infretis.cli` the `gutsrun-infretis`
+command, and `bench/chain.py` a workload that runs `bench/bare_run.py` with either runner. A link's own process
 runs `.venv/bin/python -m gutsrun.chain link ...` and imports only the
 standard library, so it reads nothing from site-packages on the shared
 file system; the workload's command then runs from the project venv.

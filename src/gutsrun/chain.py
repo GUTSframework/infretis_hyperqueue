@@ -3,8 +3,8 @@ where the previous one stopped.
 
 Generic: what runs, and how far it got, is up to a *workload* (see
 `Workload`). A chain's spec names the workload's class as
-`package.module:Class`, e.g. `gutsrun_infretis.chain:InfretisRun`, plus the
-keyword arguments to create it with. `gutsrun_infretis.chain` provides the
+`package.module:Class`, e.g. `gutsrun_infretis.workload:InfretisRun`, plus
+the keyword arguments to create it with. `gutsrun_infretis.cli` provides the
 `gutsrun-infretis` command, which calls `start_chain()`, `chain_status()` and
 `stop_chain()`.
 
