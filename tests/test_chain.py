@@ -588,6 +588,13 @@ def test_unset_settings_take_the_defaults_of_spec_and_infretisrun(project):
         cli.make_spec(rundir, cli.Config(), root=project.root)
 
 
+def test_every_setting_is_in_exactly_one_group():
+    # A setting in no group would be accepted and then ignored by make_spec.
+    groups = cli.CHAIN_SETTINGS + cli.WORKLOAD_SETTINGS + cli.SPECIAL_SETTINGS
+    assert sorted(groups) == sorted(cli.SETTINGS)
+    assert set(cli.CONFIG_TYPES.values()) == {int, str}
+
+
 def test_status_exit_code_says_whether_the_chain_is_active(project, monkeypatch, capsys):
     spec = project.make_spec()
     project.use_fakes(monkeypatch, squeue="1001 PENDING 0:00 (None)")

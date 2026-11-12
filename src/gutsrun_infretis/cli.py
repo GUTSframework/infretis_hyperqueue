@@ -28,7 +28,7 @@ import sys
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any, get_args, get_type_hints
 
 from gutsrun.chain import (
     ROOT,
@@ -84,27 +84,26 @@ class Config:
 
 
 SETTINGS = [f.name for f in dataclasses.fields(Config)]  # gutsrun.toml's keys
+# How make_spec uses each setting: every one is in exactly one group
+# (tests/test_chain.py checks this).
 CHAIN_SETTINGS = ["links", "margin", "nodes", "constraint"]  # passed on to ChainSpec
 WORKLOAD_SETTINGS = [f.name for f in dataclasses.fields(InfretisRun)]  # to InfretisRun
+SPECIAL_SETTINGS = ["site", "name", "time"]  # each with its own rule in make_spec
 
-
-def setting_type(key: str) -> type:
-    """The type of a `Config` field, without its None: int or str."""
-    [f] = [f for f in dataclasses.fields(Config) if f.name == key]
-    return next(t for t in get_args(f.type) if t is not type(None))
+CONFIG_HELP = {f.name: f.metadata["help"] for f in dataclasses.fields(Config)}
+# `int | None` -> int: what a setting's value must be when it is set.
+CONFIG_TYPES = {key: next(t for t in get_args(hint) if t is not type(None))
+                for key, hint in get_type_hints(Config).items()}
+# What a setting that is not set becomes: the default of its field in its owner.
+DEFAULTS = ({f.name: f.default for f in dataclasses.fields(ChainSpec) if f.name in CHAIN_SETTINGS}
+            | {f.name: f.default for f in dataclasses.fields(InfretisRun)})
 
 
 def setting_help(key: str) -> str:
-    """--help's text for a setting, with the default it takes from `ChainSpec` or
-    `InfretisRun` when it is not set."""
-    [f] = [f for f in dataclasses.fields(Config) if f.name == key]
-    text = f.metadata["help"]
-    owner = (ChainSpec if key in CHAIN_SETTINGS
-             else InfretisRun if key in WORKLOAD_SETTINGS else None)
-    if owner is None:
-        return text
-    [default] = [o.default for o in dataclasses.fields(owner) if o.name == key]
-    return text if default is None else f"{text} (default: {default})"
+    """--help's text for a setting, with the default it takes when it is not
+    set (from `ChainSpec` or `InfretisRun`; a default of None says nothing)."""
+    default = DEFAULTS.get(key)
+    return CONFIG_HELP[key] if default is None else f"{CONFIG_HELP[key]} (default: {default})"
 
 
 def read_gutsrun_toml(rundir: Path) -> Config:
@@ -117,7 +116,7 @@ def read_gutsrun_toml(rundir: Path) -> Config:
     for key, value in values.items():
         if key not in SETTINGS:
             raise ChainError(f"{path}: unknown key {key!r}; known: {', '.join(SETTINGS)}")
-        kind = setting_type(key)
+        kind = CONFIG_TYPES[key]
         # bool is a subclass of int: `links = true` must not pass as 1.
         if isinstance(value, bool) or not isinstance(value, kind):
             wanted = "an integer" if kind is int else "a string"
@@ -187,7 +186,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = commands.add_parser("submit", help="start a chain in the run directory")
     sub.add_argument("rundir", nargs="?", type=Path, default=Path.cwd())
     for key in SETTINGS:
-        sub.add_argument(f"--{key.replace('_', '-')}", dest=key, type=setting_type(key),
+        sub.add_argument(f"--{key.replace('_', '-')}", dest=key, type=CONFIG_TYPES[key],
                          help=setting_help(key))
     sub.add_argument("--check", action="store_true",
                      help="run the checks and show the sbatch command; submit nothing")
