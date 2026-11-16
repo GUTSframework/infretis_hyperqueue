@@ -10,11 +10,15 @@ the keyword arguments to create it with. `gutsrun_infretis.cli` provides the
 
 A link runs this module with the project venv's Python:
 
-    .venv/bin/python -m gutsrun.chain link <rundir>/.gutsrun/chain.json <n>
+    .venv/bin/python -m gutsrun.chain link <rundir>/.gutsrun/chain.json <link>
 
-Standard library only (as are gutsrun.hq and gutsrun.site, which it
-uses), so that a link's own process imports nothing from site-packages on
-the shared file system.
+where <link> is the link's number, 1, 2, ...
+
+Standard library only, as are the gutsrun modules it uses (hq, site,
+executor) and the workload's module: a link supervises its workload, and
+without third-party imports a broken or half-updated package (infretis,
+numpy, ...) cannot keep it from recording how it ended and cancelling the
+next link.
 
 Each link:
 
@@ -44,8 +48,8 @@ Each link:
 
 Everything the chain writes goes to <rundir>/.gutsrun/: chain.json (the
 spec), links.jsonl (what happened: one JSON object per line), the link logs
-link<n>-<job>.out (including the workload's output) and the HQ logs
-link<n>-<job>-hq-server.log, -hq-worker.log and, per other node,
+link<link>-<job>.out (including the workload's output) and the HQ logs
+link<link>-<job>-hq-server.log, -hq-worker.log and, per other node,
 -hq-worker-<node>.log.
 """
 
@@ -106,7 +110,8 @@ class RunProgress:
 
 class Workload(Protocol):
     """What a chain runs. Created from the spec's `workload` and `args` in
-    every link, so it must be importable with the standard library only."""
+    every link, so its module must import only the standard library (see
+    the module docstring)."""
 
     @property
     def needs_hq(self) -> bool:
@@ -314,8 +319,8 @@ def submit_link(spec: ChainSpec, site: Site, link: int, after: str | None = None
 
 @dataclass
 class StartPlan:
-    """What `check_before_start()` found: everything `start_chain()` needs to
-    go ahead."""
+    """What `check_before_start()` loaded on the way, for `start_chain()` to
+    use rather than load again."""
 
     site: Site
     progress: RunProgress  # the run's, before the chain
@@ -485,7 +490,9 @@ def stop_chain(spec: ChainSpec) -> list[str]:
         if job not in queued:
             continue
         if queued[job].startswith("RUNNING"):
-            # --batch: only the job's main process, the link, which passes it on.
+            # --batch: only the job's main process, the link, which passes the
+            # signal on to its workload. Without it, scancel would signal the
+            # job's srun steps instead: the HQ workers on the other nodes.
             subprocess.run(["scancel", "--batch", "--signal=TERM", job], check=True)
             done.append(f"link {link} (job {job}): sent SIGTERM")
         else:

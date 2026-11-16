@@ -277,8 +277,9 @@ says what a link runs and how far the run got; `gutsrun_infretis.workload`
 has the infretis one, `gutsrun_infretis.cli` the `gutsrun-infretis`
 command, and `bench/chain.py` a workload that runs `bench/bare_run.py` with either runner. A link's own process
 runs `.venv/bin/python -m gutsrun.chain link ...` and imports only the
-standard library, so it reads nothing from site-packages on the shared
-file system; the workload's command then runs from the project venv.
+standard library, so a broken or half-updated third-party package cannot
+keep it from recording how it ended; the workload's command then runs
+with the whole project venv.
 The link writes the HQ server's access file (host, ports the OS picked as
 free, keys) before starting the server, so with `nodes` > 1 one srun step
 runs `hq worker start` directly on each of the other nodes: a worker that
