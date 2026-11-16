@@ -41,30 +41,17 @@ class HQError(Exception):
     """No suitable hq binary, the server did not start, or hq refused a call."""
 
 
-# --- HQ's JSON, as HQ 0.26.2 prints it: only the keys read here ----------------------
+# --- The JSON that `hq` prints ------------------------------------------------------
+# The types below describe the output of `hq worker list` and `hq journal stream`,
+# as HQ 0.26.2 prints it. Each lists only the keys this module reads; HQ prints more.
 
 
 class WorkerResource(TypedDict):
-    """One resource of a worker in `hq worker list`."""
+    """One resource of a worker, as `hq worker list` prints it."""
 
     name: str  # e.g. "cpus", "gpus/nvidia", "mem"
     kind: str  # "range", "list" or "sum"
     values: NotRequired[list[str]]  # a "list" resource's items, e.g. GPU indices
-
-
-class WorkerResources(TypedDict):
-    resources: list[WorkerResource]
-
-
-class WorkerConfiguration(TypedDict):
-    resources: WorkerResources
-
-
-class Worker(TypedDict):
-    """One entry of `hq --output-mode json worker list`."""
-
-    id: int
-    configuration: WorkerConfiguration
 
 
 class TaskFinishedEvent(TypedDict):
@@ -130,15 +117,18 @@ def count_gpus_per_worker(hq: str, server_dir: str | Path,
                            "worker", "list"], capture_output=True, text=True)
     if done.returncode != 0:
         raise HQError(f"hq worker list: {done.stderr.strip()}")
-    workers: list[Worker] = json.loads(done.stdout)
+    workers: list[dict[str, Any]] = json.loads(done.stdout)
     return [count_gpus(worker, gpu_resource) for worker in workers]
 
 
-def count_gpus(worker: Worker, gpu_resource: str) -> int:
+def count_gpus(worker: dict[str, Any], gpu_resource: str) -> int:
     """Returns how many GPUs (`gpu_resource`) one worker of `hq worker list` has.
     HQ lists them as a resource whose `values` are the GPUs' indices."""
+    # In a worker's JSON, the resource list is at configuration → resources → resources:
+    # the first "resources" is an object that holds the list (and other settings).
+    resources: list[WorkerResource] = worker["configuration"]["resources"]["resources"]
     count = 0
-    for resource in worker["configuration"]["resources"]["resources"]:
+    for resource in resources:
         if resource["name"] == gpu_resource:
             count += len(resource.get("values", []))
     return count
