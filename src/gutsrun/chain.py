@@ -424,8 +424,11 @@ def check_before_start(spec: ChainSpec, submitting: bool = True) -> StartPlan:
     progress = workload.progress(Path(spec.rundir))
     if progress.done:
         raise ChainError(f"the run in {spec.rundir} is done: {progress.text}")
-    if workload.needs_hq and not ((root / "bin" / "hq").exists() or shutil.which("hq")):
-        raise ChainError("no hq in bin/ or on PATH; run scripts/get-hq.sh")
+    if workload.needs_hq:
+        try:
+            hq.find_hq_binary(root)
+        except hq.HQError as e:
+            raise ChainError(str(e)) from None
     rev = checkout_revision(root)
     if rev == "unknown":
         log.warning("warning: not a git clone; the runs will not record which code "
@@ -716,14 +719,16 @@ class Link:
                 log.info(f"site setup: {site.setup!r}")
                 env = env_after_site_setup(site.setup, env)
             if self.workload.needs_hq:
+                hq_bin = hq.find_hq_binary(spec.root)
                 server = spec.gutsrun_dir / f"hq-{self.job}"
-                hq_dir = stack.enter_context(hq.running_server_and_worker(
-                    spec.root, server, self.log_prefix, site.cores, env))
+                stack.enter_context(hq.running_server_and_worker(
+                    hq_bin, server, self.log_prefix, site.cores, env))
                 if spec.nodes > 1:
                     stack.enter_context(hq.running_workers_on_other_nodes(
-                        spec.root, server, self.log_prefix, spec.nodes - 1, site.cores, env))
+                        hq_bin, server, self.log_prefix, spec.nodes - 1, site.cores, env))
                 env["HQ_SERVER_DIR"] = str(server)
-                env["PATH"] = os.pathsep.join([hq_dir, env.get("PATH", "")])
+                # The workload's hq is the one checked here.
+                env["PATH"] = os.pathsep.join([str(Path(hq_bin).parent), env.get("PATH", "")])
             argv = self.workload.argv(python, self.rundir)
             if self.forwarder.received:
                 log.info("not starting the workload")

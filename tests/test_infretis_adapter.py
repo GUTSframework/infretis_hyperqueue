@@ -85,11 +85,11 @@ def test_check_wmdrun():
 def test_check_gpus(hq_cluster):
     """Moves that ask for GPUs need a worker that has them."""
     with pytest.raises(SystemExit, match="no HQ worker has that many GPUs .*: \\[0\\]"):
-        check_gpus(str(hq_cluster.dir), hq_cluster.hq, 1, wait=0)
+        check_gpus(hq_cluster.hq, str(hq_cluster.dir), 1, wait=0)
     hq_cluster.add_worker("--resource", "gpus/nvidia=[0,1]")
-    check_gpus(str(hq_cluster.dir), hq_cluster.hq, 2, wait=0)
+    check_gpus(hq_cluster.hq, str(hq_cluster.dir), 2, wait=0)
     with pytest.raises(SystemExit, match=r"\[0, 2\]"):
-        check_gpus(str(hq_cluster.dir), hq_cluster.hq, 3, wait=0)
+        check_gpus(hq_cluster.hq, str(hq_cluster.dir), 3, wait=0)
 
 
 def test_infretis_from_another_commit_refused(monkeypatch):

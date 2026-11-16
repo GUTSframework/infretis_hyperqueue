@@ -18,6 +18,7 @@ import pytest
 from conftest import wait_for
 
 import gutsrun.chain as chain
+import gutsrun.hq as hq
 import gutsrun_infretis.cli as cli
 from gutsrun.chain import (
     STOPPED_BY_SIGNAL,
@@ -583,6 +584,15 @@ def test_hq_workers_on_the_other_nodes(tmp_path):
                  "worker start --server-dir", "--cpus 2"]:
         assert part in srun
     assert "hq workers on the other nodes: srun exit" in out  # the step ended
+
+
+def test_a_wrong_hq_version_is_refused_at_submit(project):
+    fake = project.root / "bin" / "hq"
+    fake.parent.mkdir()
+    fake.write_text("#!/bin/sh\necho hq v0.1.0\n")
+    fake.chmod(0o755)
+    with pytest.raises(ChainError, match=f"need hq {hq.VERSION}, have: hq v0.1.0"):
+        start_chain(project.make_spec(needs_hq=True), submit_first=False)
 
 
 # --- the infretis workload and gutsrun-infretis --------------------------------------

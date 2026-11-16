@@ -14,7 +14,7 @@ from gutsrun.hq import HQBackend
 
 
 def test_hq_reruns_task_after_worker_crash(hq_cluster, tmp_path):
-    ex = TaskExecutor(HQBackend(hq_cluster.dir), tmp_path / "spool")
+    ex = TaskExecutor(HQBackend(hq_cluster.hq, hq_cluster.dir), tmp_path / "spool")
     try:
         started = tmp_path / "started"
         fut = ex.submit(helpers.slow, str(started), 2.0)
@@ -29,7 +29,7 @@ def test_hq_reruns_task_after_worker_crash(hq_cluster, tmp_path):
 
 
 def test_hq_task_that_cannot_start_reports_why(hq_cluster, tmp_path):
-    ex = TaskExecutor(HQBackend(hq_cluster.dir), tmp_path / "spool")
+    ex = TaskExecutor(HQBackend(hq_cluster.hq, hq_cluster.dir), tmp_path / "spool")
     try:
         # The interpreter cannot start: the task fails without a result.
         ex.python = "/nonexistent/python"
@@ -42,7 +42,7 @@ def test_hq_task_that_cannot_start_reports_why(hq_cluster, tmp_path):
 def test_hq_shutdown_cancels_running_tasks_with_sigint(hq_cluster, tmp_path):
     """HQ cancels with SIGINT to the task's process group; the call unwinds
     (an MD engine would stop its program there) and the task's log stays."""
-    ex = TaskExecutor(HQBackend(hq_cluster.dir), tmp_path / "spool")
+    ex = TaskExecutor(HQBackend(hq_cluster.hq, hq_cluster.dir), tmp_path / "spool")
     started = tmp_path / "started"
     fut = ex.submit(helpers.slow, str(started), 60.0)
     wait_for(lambda: Path(f"{started}.0").exists(), what="task started")
@@ -64,8 +64,10 @@ def test_hq_time_request_holds_a_move_that_would_not_fit(tmp_path):
         pytest.skip("no hq binary (run inside `nix develop`)")
     cluster = HQCluster(tmp_path, "--time-limit", "10m")
     try:
-        fits = TaskExecutor(HQBackend(cluster.dir, time_request="1m"), tmp_path / "a")
-        too_long = TaskExecutor(HQBackend(cluster.dir, time_request="1h"), tmp_path / "b")
+        fits = TaskExecutor(HQBackend(cluster.hq, cluster.dir, time_request="1m"),
+                            tmp_path / "a")
+        too_long = TaskExecutor(HQBackend(cluster.hq, cluster.dir, time_request="1h"),
+                                tmp_path / "b")
         held = too_long.submit(helpers.square, 3)
         assert fits.submit(helpers.square, 2).result(timeout=60) == 4
         time.sleep(1)
@@ -78,7 +80,7 @@ def test_hq_time_request_holds_a_move_that_would_not_fit(tmp_path):
 
 def test_hq_lost_event_stream_fails_the_tasks_in_flight(hq_cluster, tmp_path):
     """The run then stops, and its next start redoes the moves."""
-    backend = HQBackend(hq_cluster.dir)
+    backend = HQBackend(hq_cluster.hq, hq_cluster.dir)
     ex = TaskExecutor(backend, tmp_path / "spool")
     started = tmp_path / "started"
     try:

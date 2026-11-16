@@ -119,14 +119,14 @@ def check_infretis() -> None:
                  "because the version number is the same: add --force-reinstall.")
 
 
-def check_gpus(server_dir: str, hq_bin: str | None, gpus: int,
+def check_gpus(hq_bin: str, server_dir: str, gpus: int,
                wait: float = GPU_CHECK_WAIT) -> None:
     """Exit unless an HQ worker with at least `gpus` GPUs connects within
     `wait` seconds: HQ would hold every move, and the link would idle until
     its walltime."""
     deadline = time.monotonic() + wait
     while True:
-        found = hq.worker_gpus(server_dir, hq_bin)
+        found = hq.worker_gpus(hq_bin, server_dir)
         if any(n >= gpus for n in found):
             log.info("hq workers' GPUs: %s", found)
             return
@@ -184,11 +184,15 @@ def main(argv: list[str] | None = None) -> int:
         logging.getLogger(name).setLevel(logging.INFO)
         logging.getLogger(name).propagate = False
     check_infretis()
+    try:
+        hq_bin = hq.find_hq_binary(ROOT)
+    except hq.HQError as e:
+        sys.exit(str(e))
 
-    server_dir, hq_bin = args.hq_server_dir, None
+    server_dir = args.hq_server_dir
 
     def make_backend() -> Backend:
-        return hq.HQBackend(server_dir, time_request=args.time_request, hq_bin=hq_bin)
+        return hq.HQBackend(hq_bin, server_dir, time_request=args.time_request)
 
     resources = {"cores": args.cores_per_task, "gpus": args.gpus_per_task, "cwd": os.getcwd()}
     factory = make_executor_factory(make_backend, args.spool, resources)
@@ -201,11 +205,11 @@ def main(argv: list[str] | None = None) -> int:
                 sys.exit(f"--cores-per-task is {args.cores_per_task}, but this machine "
                          f"lets the launcher use only {cores} cores")
             server_dir = str(Path("gutsrun-hq").resolve())
-            hq_bin = str(Path(own_hq.enter_context(hq.running_server_and_worker(
-                ROOT, Path(server_dir), "gutsrun", cores))) / "hq")
+            own_hq.enter_context(hq.running_server_and_worker(
+                hq_bin, Path(server_dir), "gutsrun", cores))
             log.info("own hq server in %s, worker with %d cores", server_dir, cores)
         if args.gpus_per_task:
-            check_gpus(server_dir, hq_bin, args.gpus_per_task)
+            check_gpus(hq_bin, server_dir, args.gpus_per_task)
         # infretis says why it refuses on its "main" logger, which only has
         # a NullHandler until the run starts; show the reason on stderr.
         to_stderr = logging.StreamHandler()

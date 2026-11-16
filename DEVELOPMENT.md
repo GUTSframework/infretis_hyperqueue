@@ -182,9 +182,9 @@ tests use fake backends there.
 
 ```python
 from gutsrun import TaskExecutor
-from gutsrun.hq import HQBackend
+from gutsrun.hq import HQBackend, find_hq_binary
 
-ex = TaskExecutor(HQBackend(server_dir), "runs/x/spool",
+ex = TaskExecutor(HQBackend(find_hq_binary(root), server_dir), "runs/x/spool",
                   initializer=init, initargs=(cfg,),        # runs before every call
                   resource_dict={"cores": 2})               # default per call
 fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})

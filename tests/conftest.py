@@ -91,7 +91,7 @@ def make_executor(hq_cluster: HQCluster,
     made: list[TaskExecutor] = []
 
     def make(**kwargs: Any) -> TaskExecutor:
-        ex = TaskExecutor(HQBackend(hq_cluster.dir), tmp_path / "spool", **kwargs)
+        ex = TaskExecutor(HQBackend(hq_cluster.hq, hq_cluster.dir), tmp_path / "spool", **kwargs)
         made.append(ex)
         return ex
 

@@ -35,11 +35,11 @@ class HQError(Exception):
 
 def find_hq_binary(root: str | Path) -> str:
     """The hq binary: bin/hq in the checkout, else the one on PATH, checked
-    to be VERSION."""
+    to be VERSION. The other functions here take the binary it returns."""
     bundled = Path(root) / "bin" / "hq"
     hq = str(bundled) if bundled.exists() else shutil.which("hq")
     if hq is None:
-        raise HQError("no hq in bin/ or on PATH (scripts/get-hq.sh)")
+        raise HQError("no hq in bin/ or on PATH; run scripts/get-hq.sh")
     version = subprocess.run([hq, "--version"], capture_output=True, text=True).stdout.strip()
     if not version.endswith(f"v{VERSION}"):
         raise HQError(f"need hq {VERSION}, have: {version}")
@@ -55,13 +55,9 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def worker_gpus(server_dir: str | Path, hq_bin: str | None = None,
-                gpu_resource: str = "gpus/nvidia") -> list[int]:
+def worker_gpus(hq: str, server_dir: str | Path, gpu_resource: str = "gpus/nvidia") -> list[int]:
     """How many GPUs (`gpu_resource`) each connected worker of the server
     has. HQ detects a node's NVIDIA GPUs when the worker starts."""
-    hq = hq_bin or shutil.which("hq")
-    if hq is None:
-        raise HQError("no hq on PATH")
     done = subprocess.run([hq, "--server-dir", str(server_dir), "--output-mode", "json",
                            "worker", "list"], capture_output=True, text=True)
     if done.returncode != 0:
@@ -72,12 +68,11 @@ def worker_gpus(server_dir: str | Path, hq_bin: str | None = None,
 
 
 @contextlib.contextmanager
-def running_server_and_worker(root: str | Path, server: Path, log_prefix: str, cores: int,
-                              env: dict[str, str] | None = None) -> Iterator[str]:
-    """Run an HQ server and one worker on this node for the `with` block;
-    yields the directory of the hq binary. The worker, and so its tasks,
-    runs in `env`. Stops both and removes the server directory when the
-    block ends, also on errors.
+def running_server_and_worker(hq: str, server: Path, log_prefix: str, cores: int,
+                              env: dict[str, str] | None = None) -> Iterator[None]:
+    """Run an HQ server and one worker on this node for the `with` block.
+    The worker, and so its tasks, runs in `env`. Stops both and removes the
+    server directory when the block ends, also on errors.
 
     The access file (`<server>/access.json`: host, ports, keys) is written
     before the server starts, so workers on other nodes can start at any
@@ -85,7 +80,6 @@ def running_server_and_worker(root: str | Path, server: Path, log_prefix: str, c
 
     Both run in a session of their own: a Ctrl-C in the terminal goes to
     the caller, which stops its tasks before the `with` block stops HQ."""
-    hq = find_hq_binary(root)
     shutil.rmtree(server, ignore_errors=True)
     server.mkdir(parents=True)
     access = server / "access.json"
@@ -110,7 +104,7 @@ def running_server_and_worker(root: str | Path, server: Path, log_prefix: str, c
                 [hq, "worker", "start", "--server-dir", str(server), "--cpus", str(cores)],
                 stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True))
         log.info(f"hq server and worker started in {server}")
-        yield str(Path(hq).parent)
+        yield
     finally:
         subprocess.run([hq, "server", "stop", "--server-dir", str(server)],
                        capture_output=True)
@@ -124,14 +118,13 @@ def running_server_and_worker(root: str | Path, server: Path, log_prefix: str, c
 
 
 @contextlib.contextmanager
-def running_workers_on_other_nodes(root: str | Path, server: Path, log_prefix: str, others: int,
+def running_workers_on_other_nodes(hq: str, server: Path, log_prefix: str, others: int,
                                    cores: int, env: dict[str, str] | None = None) -> Iterator[None]:
     """An HQ worker on each of the job's `others` other nodes for the `with`
     block, in one srun step, in `env` (srun passes the environment on to the
     step); each logs to `<log_prefix>-hq-worker-<node>.log`. When the block
     ends, stops the HQ server, which ends the workers, and then the step:
     srun answers SIGTERM by killing whatever of it is left."""
-    hq = find_hq_binary(root)
     # --relative=1: the nodes after the first, which runs this link.
     # --cpus-per-task: a step gets one CPU per task unless told otherwise,
     # and the worker and its tasks would be confined to it.
@@ -153,7 +146,7 @@ def running_workers_on_other_nodes(root: str | Path, server: Path, log_prefix: s
 
 class HQBackend:
     """Tasks on the HQ server in `server_dir` (default: $HQ_SERVER_DIR, then
-    HQ's own default), all through the `hq` CLI.
+    HQ's own default), all through the `hq` CLI, the binary `hq`.
 
     - One open HQ job per backend; each executor task is the task of that
       job whose id is the executor's task id as a number (`--array <tid>`),
@@ -172,14 +165,10 @@ class HQBackend:
 
     `gpu_resource`: the HQ resource name for Resources.gpus. `time_request`:
     HQ's `--time-request` for every task, e.g. "30m": a worker with less
-    time left does not start it (off when None). `hq_bin`: the hq CLI."""
+    time left does not start it (off when None)."""
 
-    def __init__(self, server_dir: str | Path | None = None, *,
-                 gpu_resource: str = "gpus/nvidia", time_request: str | None = None,
-                 hq_bin: str | None = None) -> None:
-        hq = hq_bin or shutil.which("hq")
-        if hq is None:
-            raise HQError("no hq on PATH")
+    def __init__(self, hq: str, server_dir: str | Path | None = None, *,
+                 gpu_resource: str = "gpus/nvidia", time_request: str | None = None) -> None:
         self.hq = [hq, "--output-mode", "quiet"]
         if server_dir is not None:
             self.hq += ["--server-dir", str(server_dir)]
