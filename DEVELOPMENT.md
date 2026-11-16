@@ -39,7 +39,7 @@ flowchart LR
         cmd["gutsrun-infretis<br/>submit, status, stop"]
     end
     subgraph first["first node of the link's Slurm job"]
-        link["link<br/>python -m gutsrun.chain link"]
+        link["link<br/>python -m gutsrun.link"]
         hqs["hq server"]
         hqw["hq worker"]
         launcher["launcher<br/>infretis MC loop + TaskExecutor"]
@@ -276,7 +276,7 @@ starts HQ through `gutsrun.hq`; neither imports it. A *workload* (a small class,
 says what a link runs and how far the run got; `gutsrun_infretis.workload`
 has the infretis one, `gutsrun_infretis.cli` the `gutsrun-infretis`
 command, and `bench/chain.py` a workload that runs `bench/bare_run.py` with either runner. A link's own process
-runs `.venv/bin/python -m gutsrun.chain link ...` and imports only the
+runs `.venv/bin/python -m gutsrun.link ...` and imports only the
 standard library, so a broken or half-updated third-party package cannot
 keep it from recording how it ended; the workload's command then runs
 with the whole project venv.
@@ -296,7 +296,7 @@ Bench chains on DAS-6, from the repo root on `fs0`:
 To run a link without Slurm, e.g. on the laptop, `bench/chain.py
 --no-submit` prepares the run and its chain and prints the spec's path;
 then `GUTSRUN_CORES=4 .venv/bin/python -m
-gutsrun.chain link <spec> 1` runs link 1 here (inside `nix develop` for hq).
+gutsrun.link <spec> 1` runs link 1 here (inside `nix develop` for hq).
 The tests do the same through `start_chain(spec, submit_first=False)`.
 
 ## Tests

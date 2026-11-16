@@ -8,9 +8,10 @@ the keyword arguments to create it with. `gutsrun_infretis.cli` provides the
 `gutsrun-infretis` command, which calls `start_chain()`, `chain_status()` and
 `stop_chain()`.
 
-A link runs this module with the project venv's Python:
+A link runs `gutsrun.link`, which calls `run_link()`, with the project
+venv's Python:
 
-    .venv/bin/python -m gutsrun.chain link <rundir>/.gutsrun/chain.json <link>
+    .venv/bin/python -m gutsrun.link <rundir>/.gutsrun/chain.json <link>
 
 where <link> is the link's number, 1, 2, ...
 
@@ -54,7 +55,6 @@ link<link>-<job>-hq-server.log, -hq-worker.log and, per other node,
 -hq-worker-<node>.log.
 """
 
-import argparse
 import contextlib
 import getpass
 import importlib
@@ -361,7 +361,7 @@ def link_sbatch_argv(spec: ChainSpec, site: Site, link: int, after: str | None =
     """The sbatch command for one link, `after` the job it follows. `exec`
     makes Python the job's main process, which gets Slurm's signal."""
     python = Path(spec.root) / ".venv" / "bin" / "python"
-    command = (f"exec {shlex.quote(str(python))} -m gutsrun.chain link "
+    command = (f"exec {shlex.quote(str(python))} -m gutsrun.link "
                f"{shlex.quote(str(spec.spec_path))} {link}")
     argv = ["sbatch", "--parsable", f"--job-name=gutsrun-{spec.name}-{link}",
             f"--partition={site.partition}", f"--nodes={spec.nodes}", f"--time={spec.time}",
@@ -444,7 +444,7 @@ def start_chain(spec: ChainSpec, *, submit_first: bool = True) -> str:
     """Check (see `check_before_start()`) and save a new chain in an existing run
     directory and submit its first link; returns the job id. With
     `submit_first=False`, returns the spec's path instead, to run
-    `python -m gutsrun.chain link <spec> 1` by hand.
+    `python -m gutsrun.link <spec> 1` by hand.
 
     The spec is saved before link 1 is submitted, since link 1 may start
     and read it at once. If sbatch refuses link 1, the record says so and
@@ -780,21 +780,3 @@ def run_link(spec_path: str | Path, link: int) -> int:
     """Run link number `link` of a chain (see `Link`); returns the job's
     exit code."""
     return Link(spec_path, link).run()
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    commands = parser.add_subparsers(dest="command", required=True)
-    link = commands.add_parser("link", help="run one link (inside its Slurm job)")
-    link.add_argument("spec", type=Path)
-    link.add_argument("link", type=int)
-    args = parser.parse_args(argv)
-    setup_logging()
-    return run_link(args.spec, args.link)
-
-
-if __name__ == "__main__":
-    # Through the imported module: workloads raise gutsrun.chain.StateError,
-    # which is not this __main__ module's class of the same name.
-    from gutsrun.chain import main as imported_main
-    sys.exit(imported_main())

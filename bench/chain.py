@@ -83,7 +83,7 @@ def main() -> None:
                    help="config override as in bench/bare_run.py, e.g. output.delete_old=true")
     p.add_argument("--no-submit", action="store_true",
                    help="prepare the run and its chain, submit nothing, print the spec's "
-                        "path: run links by hand with `python -m gutsrun.chain link`")
+                        "path: run links by hand with `python -m gutsrun.link`")
     args = p.parse_args()
     setup_logging()
 

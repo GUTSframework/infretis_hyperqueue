@@ -139,7 +139,7 @@ class Project:
 
     def start_link(self, spec: ChainSpec, n: int, **env: str) -> subprocess.Popen[str]:
         """Start link `n` as a process, as Slurm would."""
-        argv = [sys.executable, "-m", "gutsrun.chain", "link", str(spec.spec_path), str(n)]
+        argv = [sys.executable, "-m", "gutsrun.link", str(spec.spec_path), str(n)]
         return subprocess.Popen(argv, cwd=self.root, env={**self.env, **env},
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
@@ -228,7 +228,7 @@ def test_start_submits_link_1_with_site_options(project, monkeypatch):
     for part in ["--partition=testq", "--exclusive", "--nodes=1", "--time=00:05:00",
                  "--signal=B:TERM@90", f"--chdir={project.rundir}",
                  f"--output={project.rundir}/.gutsrun/link1-%j.out",
-                 f"exec {project.root}/.venv/bin/python -m gutsrun.chain link",
+                 f"exec {project.root}/.venv/bin/python -m gutsrun.link",
                  f"{spec.spec_path} 1"]:
         assert part in call
     assert "--dependency" not in call
