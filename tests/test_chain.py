@@ -226,6 +226,12 @@ def test_any_failing_site_setup_line_fails_with_its_exit_code(capfd):
     assert "site setup failed at: ( exit 3 )" in capfd.readouterr().err
 
 
+def test_site_setup_output_keeps_its_stream(capfd):
+    env_after_site_setup("echo to-stdout\necho to-stderr >&2", {"PATH": os.environ["PATH"]})
+    out, err = capfd.readouterr()
+    assert out == "to-stdout\n" and err == "to-stderr\n"
+
+
 def test_site_setup_sets_the_workloads_environment(project):
     path = project.root / "sites" / "test.toml"
     path.write_text(path.read_text() + SETUP)

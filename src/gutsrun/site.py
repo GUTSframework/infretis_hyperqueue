@@ -4,6 +4,7 @@ every key), and the environment its `[environment] setup` lines leave.
 
 import os
 import subprocess
+import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -82,19 +83,22 @@ class Site:
 
 def env_after_site_setup(setup: str, env: dict[str, str]) -> dict[str, str]:
     """The environment after running the site's `setup` lines (e.g. `module
-    load`) in bash, starting from `env`. Their output goes to stderr, which
-    is the link's log. The first command that fails ends the setup, as with
-    bash's `set -e`; the log names that command."""
+    load`) in bash, starting from `env`. Their output goes to this process's
+    stdout and stderr, which in a link are the link's log. The first command
+    that fails ends the setup, as with bash's `set -e`; the log names that
+    command. Bash writes the resulting environment to a temporary file,
+    given to the script as $1."""
     script = "\n".join([
-        # File descriptor 3 keeps stdout for the environment; everything else goes to stderr.
-        "exec 3>&1 >&2",
         "set -e",
-        "trap 'echo \"site setup failed at: $BASH_COMMAND\"' ERR",
+        "trap 'echo \"site setup failed at: $BASH_COMMAND\" >&2' ERR",
         setup,
-        "env -0 >&3",
+        'env -0 > "$1"',
     ])
-    done = subprocess.run(["bash", "-c", script], env=env, stdout=subprocess.PIPE)
-    if done.returncode != 0:
-        raise SiteError(f"the site's setup failed (exit {done.returncode}): {setup!r}")
-    pairs = (entry.partition("=") for entry in done.stdout.decode().split("\0") if entry)
+    with tempfile.NamedTemporaryFile(prefix="gutsrun-site-env-") as env_file:
+        # The script's $0 is the name bash puts in front of its own error messages.
+        done = subprocess.run(["bash", "-c", script, "site-setup", env_file.name], env=env)
+        if done.returncode != 0:
+            raise SiteError(f"the site's setup failed (exit {done.returncode}): {setup!r}")
+        entries = Path(env_file.name).read_bytes().decode().split("\0")
+    pairs = (entry.partition("=") for entry in entries if entry)
     return {name: value for name, _, value in pairs}
