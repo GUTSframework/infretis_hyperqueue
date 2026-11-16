@@ -125,9 +125,16 @@ def read_gutsrun_toml(rundir: Path) -> Config:
 
 def make_spec(rundir: Path, options: Config,
               root: str | Path = ROOT) -> tuple[ChainSpec, str]:
-    """The chain for `rundir`, from gutsrun.toml's settings overridden by
-    the command line's `options` (those set), and where its walltime came
-    from, for the user. `root`: the gutsrun checkout."""
+    """Build the chain for the run in `rundir`.
+
+    The settings come from `rundir`'s gutsrun.toml; those set in `options`
+    (the command line) override them, and those set in neither take their
+    defaults. `root` is the gutsrun checkout, whose sites/ holds the site
+    files.
+
+    Returns the chain and where its walltime came from (--time,
+    gutsrun.toml or the site's max_walltime), which `submit` prints.
+    Raises ChainError if the run directory or the settings will not do."""
     rundir = rundir.resolve()
     if not (rundir / "infretis.toml").exists():
         raise ChainError(f"no infretis.toml in {rundir}")
