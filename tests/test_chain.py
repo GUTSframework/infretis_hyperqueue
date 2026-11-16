@@ -333,6 +333,26 @@ def test_sigterm_stops_and_the_next_link_continues(project):
     assert len(project.calls("sbatch")) == 1  # link 2 is the last
 
 
+def test_a_refused_next_link_is_a_warning_and_status_says_why(project, monkeypatch):
+    spec = project.spec(steps=200, delay=0.02)
+    (project.fakebin / "sbatch").write_text(
+        "#!/usr/bin/env bash\necho 'sbatch: error: job quota reached' >&2\nexit 1\n")
+    proc = project.start_link(spec, 1)
+    wait_for(lambda: (project.rundir / "state.json").exists() and step(spec) >= 3,
+             what="workload progress")
+    proc.send_signal(signal.SIGTERM)
+    out, _ = proc.communicate(timeout=60)
+    assert proc.returncode == 0, out
+    assert "warning: could not submit link 2 (sbatch: error: job quota reached)" in out
+    assert "no further link: link 2 was not submitted" in out
+    refused = [e for e in current_chain_events(spec) if e["event"] == "not submitted"]
+    assert [(e["link"], e["error"]) for e in refused] == [(2, "sbatch: error: job quota reached")]
+    project.use_fakes(monkeypatch, squeue="")
+    assert chain_status(spec).over == (
+        "link 1 stopped at the walltime; link 2 could not be submitted "
+        "(sbatch: error: job quota reached); `submit` again to continue")
+
+
 def test_failure_cancels_the_next_link(project):
     spec = project.spec(fail_at=3)
     rc, out = project.link(spec, 1)
@@ -426,7 +446,13 @@ def test_why_a_chain_is_over(project):
     done = [submitted(1), started(1), ended(1, "done")]
     assert why_chain_is_over(spec, done) == "the run is done"
     assert why_chain_is_over(spec, [*walltime, started(2), ended(2, STOPPED_BY_SIGNAL)]) == (
-        "link 2 stopped at the walltime, the last link; `submit` again to continue")
+        "link 2 stopped at the walltime; the last link (links = 2); `submit` again to continue")
+    refused = [submitted(1), started(1),
+               {"event": "not submitted", "link": 2, "error": "sbatch: error: quota"},
+               ended(1, STOPPED_BY_SIGNAL)]
+    assert why_chain_is_over(spec, refused) == (
+        "link 1 stopped at the walltime; link 2 could not be submitted "
+        "(sbatch: error: quota); `submit` again to continue")
     assert why_chain_is_over(spec, [*walltime, started(2), ended(2, "failed (exit 1)")]) == (
         f"link 2: failed (exit 1); see {spec.gutsrun_dir}/link2-2.out")
     # The last link, not the last "ended" event, says why.

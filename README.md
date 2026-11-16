@@ -136,8 +136,9 @@ infretis's own outputs, as without gutsrun, plus:
 
 - `.gutsrun/link<n>-<job>.out`: each link's log, including infretis's
   output. The first place to look when a link failed.
-- `.gutsrun/links.jsonl`: one line per event (submitted, started, ended,
-  with the result and the step reached). `status` reads it.
+- `.gutsrun/links.jsonl`: one line per event (submitted, not submitted
+  with sbatch's error, started, ended with the result and the step
+  reached). `status` reads it.
 - `.gutsrun/chain.json`: the chain's settings.
 - `.gutsrun/link<n>-<job>-hq-server.log`, `-hq-worker.log` and, with
   `nodes` > 1, `-hq-worker-<node>.log` for each other node: HQ's own logs.

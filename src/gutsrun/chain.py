@@ -309,6 +309,12 @@ def link_sbatch_argv(spec: ChainSpec, site: Site, link: int, after: str | None =
     return [*argv, f"--wrap={command}"]
 
 
+def sbatch_error(e: subprocess.CalledProcessError | OSError) -> str:
+    """What sbatch said when it refused a link, or why it could not run."""
+    error = (e.stderr or "").strip() if isinstance(e, subprocess.CalledProcessError) else ""
+    return error or str(e)
+
+
 def submit_link(spec: ChainSpec, site: Site, link: int, after: str | None = None) -> str:
     """Submit one link and note it in the record; returns its job id."""
     out = subprocess.run(link_sbatch_argv(spec, site, link, after), capture_output=True,
@@ -390,8 +396,7 @@ def start_chain(spec: ChainSpec, *, submit_first: bool = True) -> str:
     try:
         return submit_link(spec, plan.site, 1)
     except (subprocess.CalledProcessError, OSError) as e:
-        error = (e.stderr or "").strip() if isinstance(e, subprocess.CalledProcessError) else ""
-        error = error or str(e)
+        error = sbatch_error(e)
         record_event(spec, "not submitted", link=1, error=error)
         raise ChainError(f"sbatch refused link 1, nothing submitted: {error}") from e
 
@@ -425,7 +430,14 @@ def why_chain_is_over(spec: ChainSpec, record: list[dict[str, Any]]) -> str:
     log_file = spec.gutsrun_dir / f"link{link}-{job}.out"
     result = ended.get((link, job))
     if result == STOPPED_BY_SIGNAL:
-        return f"link {link} stopped at the walltime, the last link; `submit` again to continue"
+        refused = [e for e in record if e["event"] == "not submitted" and e["link"] == link + 1]
+        if refused:
+            then = f"link {link + 1} could not be submitted ({refused[-1]['error']})"
+        elif link >= spec.links:
+            then = f"the last link (links = {spec.links})"
+        else:
+            then = "no next link was submitted"
+        return f"link {link} stopped at the walltime; {then}; `submit` again to continue"
     if result is None:
         return f"link {link} recorded no end (cancelled or killed); see {log_file}"
     return f"link {link}: {result}; see {log_file}"
@@ -579,9 +591,11 @@ def run_link(spec_path: str | Path, link: int) -> int:
             try:
                 next_job = submit_link(spec, site, link + 1, after=job)
                 log.info(f"next link: job {next_job} (afterany:{job})")
-            except subprocess.CalledProcessError as e:
-                log.info(f"could not submit the next link ({e.stderr.strip()}); "
-                         "this one runs anyway")
+            except (subprocess.CalledProcessError, OSError) as e:
+                error = sbatch_error(e)
+                log.warning(f"warning: could not submit link {link + 1} ({error}); this "
+                            "one runs anyway, and the chain ends with it")
+                record_event(spec, "not submitted", link=link + 1, error=error)
 
         exit_code = EXIT_STOPPED
         try:
@@ -629,8 +643,12 @@ def run_link(spec_path: str | Path, link: int) -> int:
                 log.info(f"stopped by request; run: {progress.text}")
                 cancel_next("chain stopped")
                 return end(0, "stopped by request", progress.text)
-            then = (f"link {link + 1} continues" if next_job
-                    else f"no further link (links={spec.links})")
+            if next_job:
+                then = f"link {link + 1} continues"
+            elif link >= spec.links:
+                then = f"no further link (links = {spec.links})"
+            else:
+                then = f"no further link: link {link + 1} was not submitted"
             ran = seconds_to_slurm_walltime(round(time.monotonic() - started))
             log.info(f"{STOPPED_BY_SIGNAL} after {ran} of {spec.time}; "
                      f"run: {progress.text}; {then}")
