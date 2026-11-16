@@ -44,7 +44,7 @@ from gutsrun.chain import (
     stop_chain,
     why_chain_is_over,
 )
-from gutsrun.site import Site, SiteError, env_after_site_setup
+from gutsrun.site import SITE_KEYS, Site, SiteError, env_after_site_setup
 from gutsrun_infretis.workload import InfretisRun
 
 REPO = Path(__file__).resolve().parent.parent
@@ -178,16 +178,31 @@ def test_template_lists_every_site_key():
     # Optional keys are commented out with their example value.
     data = tomllib.loads("\n".join(line.removeprefix("# ") if " = " in line else line
                                    for line in text.splitlines()))
-    assert {table: set(keys) for table, keys in data.items()} == Site.KEYS
+    assert data == {table: {key: data[table][key] for key in keys}
+                    for table, keys in SITE_KEYS.items()}
     Site(REPO, "template")
     Site(REPO, "das6")
 
 
-def test_site_refusals(project):
-    path = project.root / "sites" / "test.toml"
-    path.write_text(path.read_text() + "typo = 1\n")
-    with pytest.raises(SiteError, match="unknown in \\[slurm\\]: typo"):
+@pytest.mark.parametrize("text, error", [
+    (SITE + "typo = 1\n", "unknown in \\[slurm\\]: typo"),
+    ("slurm = 1\n", "slurm is not a table"),
+    (SITE.replace('partition = "testq"', ""), "missing in \\[slurm\\]: partition"),
+    (SITE.replace("cores_per_node = 2", 'cores_per_node = "2"'),
+     "cores_per_node = '2' is not an integer"),
+    (SITE.replace("cores_per_node = 2", "cores_per_node = true"),
+     "cores_per_node = True is not an integer"),
+    (SITE.replace("cores_per_node = 2", "cores_per_node = 0"), "at least 1"),
+    (SITE.replace('"00:15:00"', "15"), "max_walltime = 15 is not a string"),
+    (SITE + "[environment\n", "not valid TOML"),
+])
+def test_site_refusals(project, text, error):
+    (project.root / "sites" / "test.toml").write_text(text)
+    with pytest.raises(SiteError, match=error):
         Site(project.root, "test")
+
+
+def test_an_unknown_site_lists_the_known_ones(project):
     with pytest.raises(SiteError, match="known: test"):
         Site(project.root, "nosuch")
 
