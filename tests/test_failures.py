@@ -89,7 +89,7 @@ def test_hq_lost_event_stream_fails_the_tasks_in_flight(hq_cluster, tmp_path):
         fut = ex.submit(helpers.slow, str(started), 60.0)
         wait_for(lambda: Path(f"{started}.0").exists(), what="task started")
         backend._stream.kill()
-        with pytest.raises(TaskFailed, match="hq journal stream ended"):
+        with pytest.raises(TaskFailed, match="hq journal stream ended \\(exit -9\\)\n"):
             fut.result(timeout=10)
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
@@ -108,14 +108,15 @@ def test_hq_close_logs_what_failed_and_still_closes(hq_cluster, tmp_path, caplog
     assert "could not close HQ job" in caplog.text
 
 
-# Answers `job open` with job 1 and every other call with success, except
-# `journal stream`, which prints a line that is not JSON.
+# Answers `job open` with job 1 and most other calls with success. `journal
+# stream` prints $FAKE_HQ_LINE (default: a line that is not JSON), with
+# printf's escapes; `server generate-access` fails.
 FAKE_HQ = """\
 #!/usr/bin/env bash
 while [[ $1 == --* ]]; do shift 2; done
 case "$1 $2" in
   "job open") echo 1 ;;
-  "journal stream") sleep 0.5; echo "not json"; sleep 30 ;;
+  "journal stream") sleep 0.5; printf '%b\n' "${FAKE_HQ_LINE:-not json}"; sleep 30 ;;
   "server generate-access") echo "cannot bind" >&2; exit 1 ;;
 esac
 """
@@ -133,10 +134,25 @@ def test_hq_unreadable_event_stream_fails_the_tasks_in_flight(fake_hq, tmp_path)
     ex = TaskExecutor(HQBackend(fake_hq), tmp_path / "spool")
     try:
         fut = ex.submit(helpers.square, 2)
-        with pytest.raises(TaskFailed, match="hq journal stream unreadable"):
+        with pytest.raises(TaskFailed, match="hq journal stream unreadable: a bad line"):
             fut.result(timeout=10)
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
+
+
+def test_hq_event_stream_that_cannot_be_decoded_fails_the_tasks_in_flight(
+        fake_hq, tmp_path, monkeypatch, caplog):
+    """A read error is not blamed on a line: there is none."""
+    monkeypatch.setenv("FAKE_HQ_LINE", "\\xff")
+    ex = TaskExecutor(HQBackend(fake_hq), tmp_path / "spool")
+    try:
+        fut = ex.submit(helpers.square, 2)
+        with pytest.raises(TaskFailed, match="hq journal stream unreadable \\(UnicodeDecodeError"):
+            fut.result(timeout=10)
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+    assert "cannot read the hq journal stream" in caplog.text
+    assert "this hq journal stream line" not in caplog.text
 
 
 def test_hq_server_that_cannot_get_its_access_file_is_an_hq_error(fake_hq, tmp_path):

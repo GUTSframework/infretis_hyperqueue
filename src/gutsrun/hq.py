@@ -267,7 +267,7 @@ class HQBackend:
             self.hq_argv += ["--server-dir", str(server_dir)]
         self.gpu_resource = gpu_resource
         self.time_request = time_request
-        self.job = int(self._run("job", "open"))
+        self.job = int(self._run(["job", "open"]))
         self._live: dict[int, str] = {}  # HQ task id -> tid, until reported ended
         self._ended: queue.SimpleQueue[tuple[int, str | None]] = queue.SimpleQueue()
         self._closing = False
@@ -277,16 +277,18 @@ class HQBackend:
                                         daemon=True)
         self._reader.start()
 
-    def _run(self, *args: str) -> str:
-        done = subprocess.run([*self.hq_argv, *args], capture_output=True, text=True)
+    def _run(self, command: list[str], *args: str) -> str:
+        """Runs `hq <command> <args>` and returns its output. Raises HQError
+        if hq fails, naming only the `command` (e.g. ["job", "cancel"]), not
+        the `args`: those can be long, such as a task's whole command line."""
+        done = subprocess.run([*self.hq_argv, *command, *args], capture_output=True, text=True)
         if done.returncode != 0:
-            command = " ".join(a for a in args[:2] if not a.startswith("-"))
-            raise HQError(f"hq {command}: {done.stderr.strip()}")
+            raise HQError(f"hq {' '.join(command)}: {done.stderr.strip()}")
         return done.stdout.strip()
 
     def submit(self, tid: str, argv: list[str], res: Resources, stdout: str,
                stderr: str) -> None:
-        args = ["submit", "--job", str(self.job), "--array", str(int(tid)),
+        args = ["--job", str(self.job), "--array", str(int(tid)),
                 "--cpus", str(res.cores), "--task-dir",
                 "--stdout", stdout.format(instance="%{INSTANCE_ID}") + ":rm-if-finished",
                 "--stderr", stderr.format(instance="%{INSTANCE_ID}") + ":rm-if-finished"]
@@ -300,7 +302,7 @@ class HQBackend:
             args += ["--time-request", self.time_request]
         self._live[int(tid)] = tid
         try:
-            self._run(*args, "--", *argv)
+            self._run(["submit"], *args, "--", *argv)
         except BaseException:
             del self._live[int(tid)]
             raise
@@ -329,11 +331,11 @@ class HQBackend:
         self._closing = True
         if self._live:
             try:
-                self._run("job", "cancel", str(self.job), "--reason", reason)
+                self._run(["job", "cancel"], str(self.job), "--reason", reason)
             except HQError as e:
                 log.warning(f"could not cancel HQ job {self.job}: {e}")
         try:
-            self._run("job", "close", str(self.job))
+            self._run(["job", "close"], str(self.job))
         except HQError as e:
             log.warning(f"could not close HQ job {self.job}: {e}")
         if self._stream.poll() is None:
@@ -347,25 +349,40 @@ class HQBackend:
         leave its task waiting forever. The run stops, and its next start
         redoes them."""
         assert self._stream.stdout is not None
-        line = ""
+        failure: str | None = None
+        # Any exception is caught: this thread must not end silently.
         try:
             for line in self._stream.stdout:
-                event: dict[str, Any] = json.loads(line)["event"]
-                if event.get("type") in TASK_END_TYPES:
-                    for task, error in self._task_ends(cast(TaskEndEvent, event)):
-                        self._ended.put((task, error))
-        except Exception as e:  # anything: this thread must not end silently
-            log.exception(f"cannot read this hq journal stream line: {line!r}")
+                try:
+                    self._put_task_ends(line)
+                except Exception as e:  # a line that is not the JSON expected
+                    log.exception(f"cannot read this hq journal stream line: {line!r}")
+                    failure = f"hq journal stream unreadable: a bad line ({type(e).__name__}: {e})"
+                    break
+        except Exception as e:  # reading itself failed, e.g. on bytes that are not UTF-8
+            log.exception("cannot read the hq journal stream")
             failure = f"hq journal stream unreadable ({type(e).__name__}: {e})"
-            self._stream.terminate()
-            self._stream.wait()
-        else:
+        if failure is None:
             self._stream.wait()
             stderr = self._stream.stderr.read().strip() if self._stream.stderr else ""
-            failure = f"hq journal stream ended: {stderr}"
+            failure = f"hq journal stream ended (exit {self._stream.returncode})"
+            if stderr:
+                failure += f": {stderr}"
+        else:
+            self._stream.terminate()
+            self._stream.wait()
         if not self._closing:
             for task in list(self._live):
                 self._ended.put((task, failure))
+
+    def _put_task_ends(self, line: str) -> None:
+        """Puts the ends of this job's tasks that one line of the event
+        stream reports on `_ended`. Raises if the line is not the JSON
+        expected."""
+        event: dict[str, Any] = json.loads(line)["event"]
+        if event.get("type") in TASK_END_TYPES:
+            for task, error in self._task_ends(cast(TaskEndEvent, event)):
+                self._ended.put((task, error))
 
     def _task_ends(self, event: TaskEndEvent) -> list[tuple[int, str | None]]:
         """Returns the tasks of this job that `event` ends: (task, None) for
