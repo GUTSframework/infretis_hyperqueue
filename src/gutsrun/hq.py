@@ -13,7 +13,7 @@ import socket
 import subprocess
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -62,14 +62,23 @@ def worker_gpus(hq: str, server_dir: str | Path, gpu_resource: str = "gpus/nvidi
                            "worker", "list"], capture_output=True, text=True)
     if done.returncode != 0:
         raise HQError(f"hq worker list: {done.stderr.strip()}")
-    return [sum(len(r.get("values", [])) for r in w["configuration"]["resources"]["resources"]
-                if r["name"] == gpu_resource)
-            for w in json.loads(done.stdout)]
+    workers = json.loads(done.stdout)
+    return [gpu_count(worker, gpu_resource) for worker in workers]
+
+
+def gpu_count(worker: dict[str, Any], gpu_resource: str) -> int:
+    """How many GPUs (`gpu_resource`) one worker of `hq worker list` has.
+    HQ lists them as a resource whose `values` are the GPUs' indices."""
+    count = 0
+    for resource in worker["configuration"]["resources"]["resources"]:
+        if resource["name"] == gpu_resource:
+            count += len(resource.get("values", []))
+    return count
 
 
 @contextlib.contextmanager
 def running_server_and_worker(hq: str, server: Path, log_prefix: str, cores: int,
-                              env: dict[str, str] | None = None) -> Iterator[None]:
+                              env: dict[str, str] | None = None) -> Generator[None]:
     """Run an HQ server and one worker on this node for the `with` block.
     The worker, and so its tasks, runs in `env`. Stops both and removes the
     server directory when the block ends, also on errors.
@@ -119,12 +128,20 @@ def running_server_and_worker(hq: str, server: Path, log_prefix: str, cores: int
 
 @contextlib.contextmanager
 def running_workers_on_other_nodes(hq: str, server: Path, log_prefix: str, others: int,
-                                   cores: int, env: dict[str, str] | None = None) -> Iterator[None]:
+                                   cores: int, env: dict[str, str] | None = None
+                                   ) -> Generator[None]:
     """An HQ worker on each of the job's `others` other nodes for the `with`
     block, in one srun step, in `env` (srun passes the environment on to the
-    step); each logs to `<log_prefix>-hq-worker-<node>.log`. When the block
-    ends, stops the HQ server, which ends the workers, and then the step:
-    srun answers SIGTERM by killing whatever of it is left."""
+    step); each logs to `<log_prefix>-hq-worker-<node>.log`.
+
+    A worker that dies during the block ends neither the block nor the
+    other workers (`--kill-on-bad-exit=0`): HQ reruns its tasks elsewhere.
+
+    When the block ends, this stops the HQ server, which tells every worker
+    to stop, and then terminates the step: srun answers SIGTERM by killing
+    whatever of it is left. The caller enters this block inside
+    `running_server_and_worker`'s, so this one ends first, while the server
+    still runs; that server's own stop then finds nothing left to do."""
     # --relative=1: the nodes after the first, which runs this link.
     # --cpus-per-task: a step gets one CPU per task unless told otherwise,
     # and the worker and its tasks would be confined to it.
@@ -159,7 +176,8 @@ class HQBackend:
       `task-failed` event, cut to about 2 KiB.
     - Logs of finished tasks are deleted by HQ (`:rm-if-finished`); those of
       failed and cancelled tasks are kept.
-    - HQ reruns a task whose worker crashed (HQ's default limit).
+    - HQ reruns a task whose worker was lost while it ran. After 5 lost
+      workers (HQ's default `--crash-limit`), the task fails instead.
     - HQ 0.26.2 cancels whole jobs only, so `close()` cancels every task in
       flight at once, with SIGINT to each task's process group.
 
@@ -169,23 +187,24 @@ class HQBackend:
 
     def __init__(self, hq: str, server_dir: str | Path | None = None, *,
                  gpu_resource: str = "gpus/nvidia", time_request: str | None = None) -> None:
-        self.hq = [hq, "--output-mode", "quiet"]
+        # The start of every hq command line.
+        self.hq_argv = [hq, "--output-mode", "quiet"]
         if server_dir is not None:
-            self.hq += ["--server-dir", str(server_dir)]
+            self.hq_argv += ["--server-dir", str(server_dir)]
         self.gpu_resource = gpu_resource
         self.time_request = time_request
         self.job = int(self._run("job", "open"))
         self._live: dict[int, str] = {}  # HQ task id -> tid, until reported ended
         self._ended: queue.SimpleQueue[tuple[int, str | None]] = queue.SimpleQueue()
         self._closing = False
-        self._stream = subprocess.Popen([*self.hq, "journal", "stream"], stdout=subprocess.PIPE,
-                                        stderr=subprocess.PIPE, text=True)
+        self._stream = subprocess.Popen([*self.hq_argv, "journal", "stream"],
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self._reader = threading.Thread(target=self._read_events, name="gutsrun-hq-events",
                                         daemon=True)
         self._reader.start()
 
     def _run(self, *args: str) -> str:
-        done = subprocess.run([*self.hq, *args], capture_output=True, text=True)
+        done = subprocess.run([*self.hq_argv, *args], capture_output=True, text=True)
         if done.returncode != 0:
             command = " ".join(a for a in args[:2] if not a.startswith("-"))
             raise HQError(f"hq {command}: {done.stderr.strip()}")
@@ -213,11 +232,17 @@ class HQBackend:
             raise
 
     def poll(self) -> list[tuple[str, str | None]]:
-        ended = []
+        """The tasks that ended since the last call, as (tid, None) or
+        (tid, error); see Backend.poll. The reader thread puts every end it
+        sees on `_ended`; this takes them off and turns HQ's task id back
+        into the executor's tid. A task's end is reported once: a second
+        one (e.g. a lost event stream after a task already failed) finds the
+        task gone from `_live` and is dropped."""
+        ended: list[tuple[str, str | None]] = []
         while not self._ended.empty():
             task, error = self._ended.get()
             tid = self._live.pop(task, None)
-            if tid is not None:  # None: its end was reported already
+            if tid is not None:
                 ended.append((tid, error))
         return ended
 
