@@ -146,8 +146,14 @@ def running_server_and_worker(hq: str, server: Path, log_prefix: str, cores: int
     time: they find it, and retry every 2 s until the server listens.
 
     Both run in a session of their own: a Ctrl-C in the terminal goes to
-    the caller, which stops its tasks before the `with` block stops HQ."""
-    shutil.rmtree(server, ignore_errors=True)
+    the caller, which stops its tasks before the `with` block stops HQ.
+
+    An existing `server` directory is removed first, with a warning: it is
+    left over from a server that was not stopped (a link killed hard, a
+    launcher that crashed), or another server is using it right now."""
+    if server.exists():
+        log.warning(f"warning: removing the existing HQ server directory {server}")
+        shutil.rmtree(server, ignore_errors=True)
     server.mkdir(parents=True)
     access = server / "access.json"
     done = subprocess.run([hq, "server", "generate-access", str(access),

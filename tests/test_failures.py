@@ -143,3 +143,11 @@ def test_hq_server_that_cannot_get_its_access_file_is_an_hq_error(fake_hq, tmp_p
     with pytest.raises(HQError, match="generate-access: cannot bind"):
         with running_server_and_worker(fake_hq, tmp_path / "server", str(tmp_path / "x"), 1):
             pass
+
+
+def test_hq_server_directory_left_over_is_removed_with_a_warning(hq_cluster, tmp_path, caplog):
+    server = tmp_path / "server"
+    (server / "001").mkdir(parents=True)
+    with running_server_and_worker(hq_cluster.hq, server, str(tmp_path / "x"), 1):
+        assert (server / "hq-current").exists()
+    assert f"removing the existing HQ server directory {server}" in caplog.text
