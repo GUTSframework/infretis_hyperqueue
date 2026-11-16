@@ -44,7 +44,7 @@ from gutsrun.chain import (
     stop_chain,
     why_chain_is_over,
 )
-from gutsrun.site import SITE_KEYS, Site, SiteError, env_after_site_setup
+from gutsrun.site import CORES_OVERRIDE_VARIABLE, SITE_KEYS, Site, SiteError, env_after_site_setup
 from gutsrun_infretis.workload import InfretisRun
 
 REPO = Path(__file__).resolve().parent.parent
@@ -205,6 +205,14 @@ def test_site_refusals(project, text, error):
 def test_an_unknown_site_lists_the_known_ones(project):
     with pytest.raises(SiteError, match="known: test"):
         Site(project.root, "nosuch")
+
+
+def test_the_cores_override_variable(project, monkeypatch):
+    monkeypatch.setenv(CORES_OVERRIDE_VARIABLE, "4")
+    assert Site(project.root, "test").cores == 4
+    monkeypatch.setenv(CORES_OVERRIDE_VARIABLE, "four")
+    with pytest.raises(SiteError, match="'four' is not a whole number"):
+        Site(project.root, "test")
 
 
 def test_env_after_site_setup_keeps_values_with_newlines_and_equals_signs():

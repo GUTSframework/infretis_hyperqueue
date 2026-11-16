@@ -22,12 +22,15 @@ SITE_KEYS: dict[str, dict[str, type]] = {
 REQUIRED_SITE_KEYS = {"slurm": {"partition", "cores_per_node"}}
 # How an error message names a value's type: TOML's names.
 TOML_TYPE_NAMES = {str: "a string", int: "an integer"}
+# An environment variable that, when set, overrides `cores_per_node`: for
+# running a link on a machine without Slurm (DEVELOPMENT.md).
+CORES_OVERRIDE_VARIABLE = "GUTSRUN_CORES"
 
 
 def checked_site_file(path: Path) -> dict[str, dict[str, Any]]:
     """The tables of the site file at `path`. Raises SiteError if it is not
-    valid TOML, or if a table, a key or a value's type is not in SITE_KEYS,
-    or if a required key is missing."""
+    valid TOML, if a table, a key or a value's type is not in SITE_KEYS, if
+    a required key is missing, or if `cores_per_node` is below 1."""
     try:
         data = tomllib.loads(path.read_text())
     except tomllib.TOMLDecodeError as e:
@@ -54,9 +57,9 @@ def checked_site_file(path: Path) -> dict[str, dict[str, Any]]:
 
 
 class Site:
-    """sites/<name>.toml; sites/template.toml documents every key. The
-    environment variable GUTSRUN_CORES overrides `cores_per_node`, for tests
-    and for trying a link on a machine without Slurm."""
+    """The settings of the site `name`, read from <root>/sites/<name>.toml.
+    `cores` is `cores_per_node`, or the value of CORES_OVERRIDE_VARIABLE if
+    that is set."""
 
     def __init__(self, root: str | Path, name: str) -> None:
         path = Path(root) / "sites" / f"{name}.toml"
@@ -67,7 +70,12 @@ class Site:
         data = checked_site_file(path)
         slurm = data["slurm"]
         self.partition: str = slurm["partition"]
-        self.cores: int = int(os.environ.get("GUTSRUN_CORES") or slurm["cores_per_node"])
+        self.cores: int = slurm["cores_per_node"]
+        if override := os.environ.get(CORES_OVERRIDE_VARIABLE):
+            if not override.isdigit() or int(override) < 1:
+                raise SiteError(f"{CORES_OVERRIDE_VARIABLE}={override!r} is not a whole "
+                                "number of cores, at least 1")
+            self.cores = int(override)
         self.max_walltime: str | None = slurm.get("max_walltime")
         self.setup: str | None = data.get("environment", {}).get("setup")
 
