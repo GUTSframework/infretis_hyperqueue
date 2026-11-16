@@ -22,8 +22,9 @@ next link.
 
 Each link:
 
-1. Stops if `stop_chain()` was called (exit 0). Link > 1: stops if the
-   workload's state is unreadable (exit 1) or the run is done (exit 0).
+1. Stops if `stop_chain()` was called (exit 0), if the workload's state
+   is unreadable (exit 1) or if the run is done (exit 0). Link 1 checks
+   this too, although `start_chain()` checked it before submitting it.
 2. Submits the next link right away with the dependency `afterany` on this
    one: Slurm starts it once this job has ended in any state (finished,
    failed, cancelled, timed out). A link that is killed is still followed.
@@ -562,15 +563,15 @@ def run_link(spec_path: str | Path, link: int) -> int:
         if spec.stop_file.exists():
             log.info("the chain was stopped; not running")
             return end(0, "not run: chain stopped", "")
+        try:
+            progress = workload.progress(rundir)
+        except StateError as e:
+            log.info(f"{e}; chain stops")
+            return end(1, "unreadable state", str(e))
+        if progress.done:
+            log.info(f"done: {progress.text}")
+            return end(0, "done before it ran", progress.text)
         if link > 1:
-            try:
-                progress = workload.progress(rundir)
-            except StateError as e:
-                log.info(f"{e}; chain stops")
-                return end(1, "unreadable state", str(e))
-            if progress.done:
-                log.info(f"done: {progress.text}")
-                return end(0, "done before it ran", progress.text)
             log.info(f"continuing at {progress.text}")
             workload.before_link(rundir, link)
 

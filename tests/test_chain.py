@@ -356,10 +356,11 @@ def test_revision_without_git(tmp_path, monkeypatch):
     assert checkout_revision(tmp_path) == "unknown"
 
 
-def test_unreadable_state_stops_the_chain_before_submitting(project):
+@pytest.mark.parametrize("n", [1, 2])
+def test_unreadable_state_stops_the_chain_before_submitting(project, n):
     spec = project.spec()
     (project.rundir / "state.json").write_text("{")
-    rc, out = project.link(spec, 2)
+    rc, out = project.link(spec, n)
     assert rc == 1
     assert "chain stops" in out
     assert project.calls("sbatch") == []
@@ -368,9 +369,12 @@ def test_unreadable_state_stops_the_chain_before_submitting(project):
 def test_finished_run_makes_later_links_exit_at_once(project):
     spec = project.spec(links=3)
     assert project.link(spec, 1)[0] == 0
-    rc, out = project.link(spec, 2)
-    assert rc == 0 and "done: step 5 of 5" in out
+    for n in (2, 1):  # link 1 too, e.g. if the run finished while it was queued
+        rc, out = project.link(spec, n)
+        assert rc == 0 and "done: step 5 of 5" in out
     assert len(project.calls("sbatch")) == 1
+    ends = [e["result"] for e in current_chain_events(spec) if e["event"] == "ended"]
+    assert ends == ["done", "done before it ran", "done before it ran"]
 
 
 # --- status and stop ----------------------------------------------------------------
