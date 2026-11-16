@@ -72,7 +72,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from types import FrameType
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from gutsrun import hq
 from gutsrun.site import Site, SiteError, env_after_site_setup
@@ -407,12 +407,16 @@ class StatusReport:
 
     progress: str  # the run's, e.g. "step 526 of 1000"
     links: list[str]  # one line per link: its state in the queue, or how it ended
-    over: str | None  # why the chain is over, if it is
-    active: bool  # a job of the chain is queued or running (or squeue does not answer)
+    # "active": a job of the chain is queued or running; "over": none is;
+    # "unknown": squeue does not answer, so it cannot tell.
+    state: Literal["active", "over", "unknown"]
+    reason: str | None  # why the chain is over; None unless state is "over"
 
     def lines(self) -> list[str]:
         """The report as text, one line each."""
-        return [self.progress, *self.links] + ([f"chain over: {self.over}"] if self.over else [])
+        warning = ["(squeue does not answer)"] if self.state == "unknown" else []
+        over = [f"chain over: {self.reason}"] if self.state == "over" else []
+        return [self.progress, *warning, *self.links, *over]
 
 
 def why_chain_is_over(spec: ChainSpec, record: list[dict[str, Any]]) -> str:
@@ -454,8 +458,8 @@ def chain_status(spec: ChainSpec) -> StatusReport:
     record = current_chain_events(spec)
     ended = {(e["link"], e["job"]): e for e in record if e["event"] == "ended"}
     queued = squeue_jobs()
-    links = [] if queued is not None else ["(squeue does not answer)"]
-    active = queued is None
+    links: list[str] = []
+    active = False  # a job of the chain is in the queue
     previous: str | None = None  # the result the link before recorded
     for link, job in link_jobs(spec):
         head = f"link {link:>2}  job {job:<10}"
@@ -471,8 +475,11 @@ def chain_status(spec: ChainSpec) -> StatusReport:
         else:
             links.append(f"{head} not in the queue, no end recorded")
         previous = result
-    over = why_chain_is_over(spec, record) if not active and record else None
-    return StatusReport(progress, links, over, active)
+    if queued is None:
+        return StatusReport(progress, links, "unknown", None)
+    if active:
+        return StatusReport(progress, links, "active", None)
+    return StatusReport(progress, links, "over", why_chain_is_over(spec, record))
 
 
 def follow_chain_status(spec: ChainSpec, interval: float = FOLLOW_INTERVAL) -> None:
@@ -484,7 +491,7 @@ def follow_chain_status(spec: ChainSpec, interval: float = FOLLOW_INTERVAL) -> N
         if report.lines() != shown:
             print(f"--- {datetime.now():%H:%M:%S}", *report.lines(), sep="\n", flush=True)
             shown = report.lines()
-        if not report.active:
+        if report.state == "over":
             return
         time.sleep(interval)
 

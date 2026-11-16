@@ -88,7 +88,8 @@ A `stop` within about a second of a link starting can show that link as
 the run continues normally with the next `submit`.
 
 For scripts: `status` exits with 0 when the chain is over (none of its
-jobs is queued or running) and with 10 while it is still active.
+jobs is queued or running) and with 10 while it is still active, or
+while `squeue` does not answer.
 `status --json` prints the same report as JSON; `--help` lists its keys.
 From another machine, e.g. your laptop, `scripts/wait-jobs.sh <host> --run
 <rundir>` waits over ssh until the chain is over. It needs a copy of this

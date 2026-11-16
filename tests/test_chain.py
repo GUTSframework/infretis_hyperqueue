@@ -272,7 +272,7 @@ def test_sbatch_missing_or_refusing(project, monkeypatch):
     with pytest.raises(ChainError, match="sbatch refused link 1, nothing submitted: .*partition"):
         start_chain(spec)
     assert [e["event"] for e in current_chain_events(spec)] == ["chain", "not submitted"]
-    assert chain_status(spec).over == "no link was submitted"
+    assert chain_status(spec).reason == "no link was submitted"
 
 
 def test_a_new_chain_waits_for_the_last_to_leave_the_queue(project, monkeypatch):
@@ -308,7 +308,7 @@ def test_done_cancels_the_pre_submitted_link(project, monkeypatch):
     project.use_fakes(monkeypatch, squeue="")
     report = chain_status(spec)
     assert report.links[1].endswith("job 1001       cancelled: the run was done")
-    assert report.over == "the run is done"
+    assert (report.state, report.reason) == ("over", "the run is done")
 
 
 def test_sigterm_stops_and_the_next_link_continues(project):
@@ -348,7 +348,7 @@ def test_a_refused_next_link_is_a_warning_and_status_says_why(project, monkeypat
     refused = [e for e in current_chain_events(spec) if e["event"] == "not submitted"]
     assert [(e["link"], e["error"]) for e in refused] == [(2, "sbatch: error: job quota reached")]
     project.use_fakes(monkeypatch, squeue="")
-    assert chain_status(spec).over == (
+    assert chain_status(spec).reason == (
         "link 1 stopped at the walltime; link 2 could not be submitted "
         "(sbatch: error: job quota reached); `submit` again to continue")
 
@@ -409,7 +409,7 @@ def test_status_reports_progress_and_each_link(project, monkeypatch, capsys):
 
     project.use_fakes(monkeypatch, squeue="1001 PENDING 0:00 (Dependency)")
     report = chain_status(spec)
-    assert report.active and report.over is None
+    assert (report.state, report.reason) == ("active", None)
     assert report.progress.startswith("r (test): step ")
     assert "ended" in report.links[0] and STOPPED_BY_SIGNAL in report.links[0]
     assert report.links[1].endswith("PENDING 0:00 (Dependency)")
@@ -417,15 +417,18 @@ def test_status_reports_progress_and_each_link(project, monkeypatch, capsys):
 
     project.use_fakes(monkeypatch, squeue="")
     report = chain_status(spec)
-    assert not report.active and report.links[1].endswith("not in the queue, no end recorded")
-    assert report.over == (
+    assert report.state == "over"
+    assert report.links[1].endswith("not in the queue, no end recorded")
+    assert report.reason == (
         f"link 2 recorded no end (cancelled or killed); see {spec.gutsrun_dir}/link2-1001.out")
     follow_chain_status(spec, interval=0)  # returns: nothing left in the queue
     assert "chain over: link 2" in capsys.readouterr().out
 
     project.use_fakes(monkeypatch)
     report = chain_status(spec)
-    assert report.active and "(squeue does not answer)" in report.links
+    assert (report.state, report.reason) == ("unknown", None)
+    assert "(squeue does not answer)" not in report.links  # a warning, not a link
+    assert report.lines()[1] == "(squeue does not answer)"
 
 
 def test_why_a_chain_is_over(project):
@@ -467,9 +470,10 @@ def test_why_a_chain_is_over(project):
 
 def test_follow_prints_each_change_until_the_chain_is_over(project, monkeypatch):
     spec = project.make_spec()
-    reports = iter([StatusReport("step 1", [], None, True), StatusReport("step 1", [], None, True),
-                    StatusReport("step 2", [], None, True),
-                    StatusReport("step 2", [], "done", False)])
+    reports = iter([StatusReport("step 1", [], "active", None),
+                    StatusReport("step 1", [], "active", None),
+                    StatusReport("step 2", [], "unknown", None),  # keeps following
+                    StatusReport("step 2", [], "over", "done")])
     printed = []
     monkeypatch.setattr(chain, "chain_status", lambda _spec: next(reports))
     monkeypatch.setattr(chain.time, "sleep", lambda _s: None)
@@ -644,7 +648,7 @@ def test_status_exit_code_says_whether_the_chain_is_active(project, monkeypatch,
     assert stopped.value.code == 0
     report = json.loads(capsys.readouterr().out)
     assert report["lines"] == text.splitlines()
-    assert report["over"].startswith("link 1 recorded no end") and report["active"] is False
+    assert report["state"] == "over" and report["reason"].startswith("link 1 recorded no end")
 
 
 def test_bench_workload_imports_from_bench(project):

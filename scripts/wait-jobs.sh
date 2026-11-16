@@ -72,7 +72,7 @@ while :; do
         fi
         if [ -n "$rundir" ]; then
             # Not every change: a running link's time and steps change at every poll.
-            new_key="$(jq -c '[(.links | length), .over]' <<<"$out")"
+            new_key="$(jq -c '[(.links | length), .state, .reason]' <<<"$out")"
             if [ "$new_key" != "$key" ] || [ "$ssh_exit_status" = 0 ]; then
                 echo "$(date +%H:%M:%S)"
                 jq -r '.lines[]' <<<"$out" | sed 's/^/    /'

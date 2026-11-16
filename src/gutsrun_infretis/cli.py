@@ -198,8 +198,9 @@ def main(argv: list[str] | None = None) -> None:
                      help="print it again whenever it changes, until the chain ends")
     how.add_argument("--json", action="store_true",
                      help="print one JSON object, for scripts: progress, links (one line "
-                          "each), over (null while active), active, and lines (the report "
-                          "as text)")
+                          "each), state (active, over, or unknown if squeue does not "
+                          "answer), reason (why it is over; null otherwise), and lines "
+                          "(the report as text)")
     stat.add_argument("--interval", type=float, default=FOLLOW_INTERVAL,
                       help="seconds between checks (default: %(default)s)")
 
@@ -228,7 +229,7 @@ def main(argv: list[str] | None = None) -> None:
                     print(json.dumps({**asdict(report), "lines": report.lines()}))
                 else:
                     print(*report.lines(), sep="\n")
-                sys.exit(EXIT_ACTIVE if report.active else 0)
+                sys.exit(0 if report.state == "over" else EXIT_ACTIVE)
         else:
             print(*stop_chain(load_spec(args.rundir)), sep="\n")
     except (ChainError, SiteError, StateError) as e:
