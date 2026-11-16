@@ -15,7 +15,7 @@ import threading
 import time
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, NotRequired, TypedDict, cast
 
 from gutsrun.executor import Resources
 
@@ -31,6 +31,64 @@ EVENT_READER_STOP_TIMEOUT = 5  # s for the event-stream thread to end at close()
 
 class HQError(Exception):
     """No suitable hq binary, the server did not start, or hq refused a call."""
+
+
+# --- HQ's JSON, as HQ 0.26.2 prints it: only the keys read here ----------------------
+
+
+class WorkerResource(TypedDict):
+    """One resource of a worker in `hq worker list`."""
+
+    name: str  # e.g. "cpus", "gpus/nvidia", "mem"
+    kind: str  # "range", "list" or "sum"
+    values: NotRequired[list[str]]  # a "list" resource's items, e.g. GPU indices
+
+
+class WorkerResources(TypedDict):
+    resources: list[WorkerResource]
+
+
+class WorkerConfiguration(TypedDict):
+    resources: WorkerResources
+
+
+class Worker(TypedDict):
+    """One entry of `hq --output-mode json worker list`."""
+
+    id: int
+    configuration: WorkerConfiguration
+
+
+class TaskFinishedEvent(TypedDict):
+    type: Literal["task-finished"]
+    job: int
+    task: int
+
+
+class TaskFailedEvent(TypedDict):
+    type: Literal["task-failed"]
+    job: int
+    task: int
+    error: NotRequired[str]  # what the task wrote to $HQ_ERROR_FILENAME, or HQ's reason
+
+
+class CanceledTask(TypedDict):
+    job_id: int
+    job_task_id: int
+
+
+class TaskCanceledEvent(TypedDict):
+    """One event for all tasks a `hq job cancel` cancelled."""
+
+    type: Literal["task-canceled"]
+    tasks: list[CanceledTask]
+
+
+# The events that end a task. `hq journal stream` prints one JSON object
+# per line, {"time": ..., "event": {...}}; most events are of other types,
+# and one (after a job cancel) has no type at all.
+TaskEndEvent = TaskFinishedEvent | TaskFailedEvent | TaskCanceledEvent
+TASK_END_TYPES = ("task-finished", "task-failed", "task-canceled")
 
 
 def find_hq_binary(root: str | Path) -> str:
@@ -62,11 +120,11 @@ def worker_gpus(hq: str, server_dir: str | Path, gpu_resource: str = "gpus/nvidi
                            "worker", "list"], capture_output=True, text=True)
     if done.returncode != 0:
         raise HQError(f"hq worker list: {done.stderr.strip()}")
-    workers = json.loads(done.stdout)
+    workers: list[Worker] = json.loads(done.stdout)
     return [gpu_count(worker, gpu_resource) for worker in workers]
 
 
-def gpu_count(worker: dict[str, Any], gpu_resource: str) -> int:
+def gpu_count(worker: Worker, gpu_resource: str) -> int:
     """How many GPUs (`gpu_resource`) one worker of `hq worker list` has.
     HQ lists them as a resource whose `values` are the GPUs' indices."""
     count = 0
@@ -276,8 +334,10 @@ class HQBackend:
         line = ""
         try:
             for line in self._stream.stdout:
-                for task, error in self._task_ends(json.loads(line)["event"]):
-                    self._ended.put((task, error))
+                event: dict[str, Any] = json.loads(line)["event"]
+                if event.get("type") in TASK_END_TYPES:
+                    for task, error in self._task_ends(cast(TaskEndEvent, event)):
+                        self._ended.put((task, error))
         except Exception as e:  # anything: this thread must not end silently
             log.exception(f"cannot read this hq journal stream line: {line!r}")
             failure = f"hq journal stream unreadable ({type(e).__name__}: {e})"
@@ -291,15 +351,15 @@ class HQBackend:
             for task in list(self._live):
                 self._ended.put((task, failure))
 
-    def _task_ends(self, event: dict[str, Any]) -> list[tuple[int, str | None]]:
-        """(task, None) for a finished task of this job, (task, error) for a
-        failed or cancelled one; [] for any other event."""
-        kind = event.get("type")
-        if kind in ("task-finished", "task-failed") and event["job"] == self.job:
-            return [(event["task"], event.get("error", "failed") if kind == "task-failed"
-                     else None)]
-        if kind == "task-canceled":
-            return [(t["job_task_id"], "cancelled") for t in event["tasks"]
-                    if t["job_id"] == self.job]
-        return []
+    def _task_ends(self, event: TaskEndEvent) -> list[tuple[int, str | None]]:
+        """The tasks of this job that `event` ends: (task, None) for a
+        finished one, (task, error) for a failed or cancelled one."""
+        if event["type"] == "task-canceled":
+            return [(task["job_task_id"], "cancelled") for task in event["tasks"]
+                    if task["job_id"] == self.job]
+        if event["job"] != self.job:
+            return []
+        if event["type"] == "task-failed":
+            return [(event["task"], event.get("error", "failed"))]
+        return [(event["task"], None)]
 
