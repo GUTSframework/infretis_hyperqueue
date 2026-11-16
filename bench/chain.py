@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+import bare_run
+
 from gutsrun.chain import (
     ROOT,
     ChainError,
@@ -87,7 +89,6 @@ def main() -> None:
     args = p.parse_args()
     setup_logging()
 
-    import bare_run  # not at the top: links import this module, standard library only
 
     name = args.name or f"{date.today()}-{args.case}-{args.runner}"
     rundir = ROOT / "runs" / args.site / name

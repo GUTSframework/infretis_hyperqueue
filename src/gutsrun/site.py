@@ -1,7 +1,5 @@
 """A cluster's settings: sites/<name>.toml (sites/template.toml documents
 every key), and the environment its `[environment] setup` lines leave.
-
-Standard library only: a link imports it.
 """
 
 import os

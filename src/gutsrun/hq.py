@@ -1,8 +1,6 @@
 """Everything HyperQueue, through its `hq` CLI: a server and worker on the
 link's node, workers on the job's other nodes, and `HQBackend`, which runs
 tasks on a server.
-
-Standard library only: a link imports it.
 """
 
 import contextlib

@@ -10,8 +10,6 @@ A module of its own so that `gutsrun.chain` is only ever imported. Run as
 and as `gutsrun.chain` when the workload imports it, and the link would not
 catch the `StateError` a workload raises: a different class of the same
 name.
-
-Standard library only, like `gutsrun.chain` (see there).
 """
 
 import argparse

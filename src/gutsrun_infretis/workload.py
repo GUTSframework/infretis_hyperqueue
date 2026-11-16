@@ -1,9 +1,6 @@
 """The infretis workload of a chain (see `gutsrun.chain.Workload`): what
 each link runs, and how far the run got. `gutsrun_infretis.cli` creates
 chains with it.
-
-Standard library only: every link imports this module to read the run's
-state.
 """
 
 import tomllib

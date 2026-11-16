@@ -1,4 +1,4 @@
-"""A counting workload for the gutsrun.chain tests (standard library only).
+"""A counting workload for the gutsrun.chain tests.
 
 `Counter` is the workload; run as a script it is the command a link runs:
 it counts `step` in <rundir>/state.json up to `steps`, one per `delay`

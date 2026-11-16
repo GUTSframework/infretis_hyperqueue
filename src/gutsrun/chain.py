@@ -15,12 +15,6 @@ venv's Python:
 
 where <link> is the link's number, 1, 2, ...
 
-Standard library only, as are the gutsrun modules it uses (hq, site,
-executor) and the workload's module: a link supervises its workload, and
-without third-party imports a broken or half-updated package (infretis,
-numpy, ...) cannot keep it from recording how it ended and cancelling the
-next link.
-
 Each link:
 
 1. Stops if `stop_chain()` was called (exit 0), if the workload's state
@@ -112,8 +106,7 @@ class RunProgress:
 
 class Workload(Protocol):
     """What a chain runs. Created from the spec's `workload` and `args` in
-    every link, so its module must import only the standard library (see
-    the module docstring)."""
+    every link."""
 
     @property
     def needs_hq(self) -> bool:
