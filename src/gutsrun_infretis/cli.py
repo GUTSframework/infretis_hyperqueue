@@ -41,9 +41,7 @@ from gutsrun.chain import (
     follow_chain_status,
     link_sbatch_argv,
     load_spec,
-    seconds_to_slurm_walltime,
     setup_logging,
-    slurm_walltime_to_seconds,
     start_chain,
     stop_chain,
 )
@@ -51,8 +49,6 @@ from gutsrun.site import Site, SiteError
 from gutsrun_infretis.workload import InfretisRun
 
 EXIT_ACTIVE = 10  # `status`: some job of the chain is still queued or running
-# s: the default walltime per link stays this far under the site's max_walltime
-MAX_WALLTIME_HEADROOM = 60
 
 
 def setting(text: str) -> Any:
@@ -71,8 +67,8 @@ class Config:
 
     site: str | None = setting("sites/<site>.toml in the gutsrun checkout (required)")
     name: str | None = setting("label for the Slurm job names (default: the directory's name)")
-    time: str | None = setting("walltime per link, e.g. 00:14:00 (default: just under the "
-                               "site's max_walltime)")
+    time: str | None = setting("walltime per link, e.g. 00:14:00 (default: the site's "
+                               "max_walltime)")
     links: int | None = setting("most links, a cap on the whole chain")
     margin: int | None = setting("seconds before the walltime that SIGTERM is asked for")
     nodes: int | None = setting("nodes per link, each with an HQ worker on all its cores")
@@ -161,8 +157,7 @@ def make_spec(rundir: Path, options: Config,
         limit = site.max_walltime
         if limit is None:
             raise ChainError("no time: set `time` in gutsrun.toml or pass --time")
-        time = seconds_to_slurm_walltime(slurm_walltime_to_seconds(limit) - MAX_WALLTIME_HEADROOM)
-        source = f"just under max_walltime {limit} in sites/{config.site}.toml"
+        time, source = limit, f"max_walltime {limit} in sites/{config.site}.toml"
 
     spec = ChainSpec(rundir=str(rundir), site=config.site, name=config.name or rundir.name,
                      workload="gutsrun_infretis.workload:InfretisRun", time=time, args=asdict(run),

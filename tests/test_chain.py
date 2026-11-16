@@ -549,8 +549,8 @@ def test_submit_reads_gutsrun_toml_and_the_command_line(project, monkeypatch, ca
     with pytest.raises(ChainError, match="cores_per_task is 3, but a node of test has 2 cores"):
         cli.make_spec(rundir, cli.Config(cores_per_task=3), root=project.root)
     spec, source = cli.make_spec(rundir, cli.Config(links=5), root=project.root)
-    assert (spec.links, spec.name, spec.time) == (5, "run", "0:14:00")  # just under 15 min
-    assert source == "just under max_walltime 00:15:00 in sites/test.toml"
+    assert (spec.links, spec.name, spec.time) == (5, "run", "00:15:00")  # the site's limit
+    assert source == "max_walltime 00:15:00 in sites/test.toml"
     assert (spec.nodes, spec.constraint) == (3, "A4000")
     assert spec.args == {"cores_per_task": 2, "gpus_per_task": 1, "time_request": "30m"}
     assert spec.workload == "gutsrun_infretis.workload:InfretisRun"

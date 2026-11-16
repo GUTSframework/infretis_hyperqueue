@@ -103,7 +103,7 @@ Instead of options, a run directory can hold its settings in
 ```toml
 site = "das6"
 links = 20             # a cap on the whole chain
-time = "00:14:00"      # walltime per link (not set: just under the site's max_walltime)
+time = "00:14:00"      # walltime per link (not set: the site's max_walltime)
 margin = 90            # seconds before the walltime that SIGTERM comes
 cores_per_task = 1     # cores per infretis move, i.e. per MD engine call
 gpus_per_task = 0      # GPUs per infretis move
@@ -170,8 +170,10 @@ differ between clusters:
 - **Policy limits.** Some clusters limit the walltime by policy rather
   than in Slurm, e.g. DAS-6's 15 minutes during the day.
   `max_walltime` holds such a limit; a chain without its own `time`
-  then gets just under it, and without either `submit` asks for `time`. Nothing stops a longer `time`: keeping to the
-  policy is up to you. Where Slurm itself enforces the limits, leave it
+  then gets exactly that, and without either `submit` asks for `time`.
+  Nothing stops a longer `time`: keeping to the policy is up to you.
+  Slurm ends a job up to about a minute after its walltime (its time
+  checks run every 30 s or so, then `KillWait`), whatever the walltime. Where Slurm itself enforces the limits, leave it
   out.
 - **How the MD engine is loaded.** Usually a site module, whose name
   differs from cluster to cluster. `[environment] setup` holds the lines
