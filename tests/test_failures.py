@@ -1,5 +1,6 @@
 """Failure injection on a real HQ server: a worker killed under a running
-task, a task that cannot start, a cancel, a lost event stream."""
+task, a task that cannot start, a cancel, a lost or unreadable event
+stream, a failing close, a server without its access file."""
 
 import signal
 import time
@@ -10,7 +11,8 @@ import pytest
 from conftest import wait_for
 
 from gutsrun import TaskExecutor, TaskFailed
-from gutsrun.hq import HQBackend
+from gutsrun.executor import Resources
+from gutsrun.hq import HQBackend, HQError, running_server_and_worker
 
 
 def test_hq_reruns_task_after_worker_crash(hq_cluster, tmp_path):
@@ -91,3 +93,53 @@ def test_hq_lost_event_stream_fails_the_tasks_in_flight(hq_cluster, tmp_path):
             fut.result(timeout=10)
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
+
+
+def test_hq_close_logs_what_failed_and_still_closes(hq_cluster, tmp_path, caplog):
+    """With the server gone, both the cancel and the close fail; each is
+    logged, and close() still ends. No executor polls here, so the task is
+    still in flight when close() runs."""
+    backend = HQBackend(hq_cluster.hq, hq_cluster.dir)
+    log = str(tmp_path / "task.{instance}")
+    backend.submit("1", ["sleep", "60"], Resources(), log, log)
+    hq_cluster.stop()
+    backend.close()
+    assert "could not cancel HQ job" in caplog.text
+    assert "could not close HQ job" in caplog.text
+
+
+# Answers `job open` with job 1 and every other call with success, except
+# `journal stream`, which prints a line that is not JSON.
+FAKE_HQ = """\
+#!/usr/bin/env bash
+while [[ $1 == --* ]]; do shift 2; done
+case "$1 $2" in
+  "job open") echo 1 ;;
+  "journal stream") sleep 0.5; echo "not json"; sleep 30 ;;
+  "server generate-access") echo "cannot bind" >&2; exit 1 ;;
+esac
+"""
+
+
+@pytest.fixture
+def fake_hq(tmp_path):
+    path = tmp_path / "hq"
+    path.write_text(FAKE_HQ)
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_hq_unreadable_event_stream_fails_the_tasks_in_flight(fake_hq, tmp_path):
+    ex = TaskExecutor(HQBackend(fake_hq), tmp_path / "spool")
+    try:
+        fut = ex.submit(helpers.square, 2)
+        with pytest.raises(TaskFailed, match="hq journal stream unreadable"):
+            fut.result(timeout=10)
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+
+
+def test_hq_server_that_cannot_get_its_access_file_is_an_hq_error(fake_hq, tmp_path):
+    with pytest.raises(HQError, match="generate-access: cannot bind"):
+        with running_server_and_worker(fake_hq, tmp_path / "server", str(tmp_path / "x"), 1):
+            pass

@@ -92,10 +92,12 @@ def running_server_and_worker(hq: str, server: Path, log_prefix: str, cores: int
     shutil.rmtree(server, ignore_errors=True)
     server.mkdir(parents=True)
     access = server / "access.json"
-    subprocess.run([hq, "server", "generate-access", str(access),
-                    "--host", socket.gethostname(),
-                    "--client-port", str(free_port()), "--worker-port", str(free_port())],
-                   capture_output=True, check=True)
+    done = subprocess.run([hq, "server", "generate-access", str(access),
+                           "--host", socket.gethostname(),
+                           "--client-port", str(free_port()), "--worker-port", str(free_port())],
+                          capture_output=True, text=True)
+    if done.returncode != 0:
+        raise HQError(f"hq server generate-access: {done.stderr.strip()}")
     processes: list[subprocess.Popen[bytes]] = []
     try:
         with open(f"{log_prefix}-hq-server.log", "wb") as out:
@@ -247,28 +249,47 @@ class HQBackend:
         return ended
 
     def close(self, reason: str = "executor shut down") -> None:
+        """Cancel the tasks in flight, close the job, stop reading events.
+        A failed hq call is logged, not raised: at shutdown the server may
+        be gone already, and the rest of the shutdown still has to run."""
         self._closing = True
-        with contextlib.suppress(HQError):  # the server may be gone already
-            if self._live:
+        if self._live:
+            try:
                 self._run("job", "cancel", str(self.job), "--reason", reason)
+            except HQError as e:
+                log.warning(f"could not cancel HQ job {self.job}: {e}")
+        try:
             self._run("job", "close", str(self.job))
+        except HQError as e:
+            log.warning(f"could not close HQ job {self.job}: {e}")
         if self._stream.poll() is None:
             self._stream.terminate()
         self._reader.join(timeout=EVENT_READER_STOP_TIMEOUT)
 
     def _read_events(self) -> None:
         """Turn the job's task events into (task, None | error) on `_ended`.
-        If the stream ends while the backend is open, every task in flight
-        fails: the run stops, and its next start redoes them."""
+        If the stream ends while the backend is open, or has a line this
+        cannot read, every task in flight fails: an end it missed would
+        leave its task waiting forever. The run stops, and its next start
+        redoes them."""
         assert self._stream.stdout is not None
-        for line in self._stream.stdout:
-            for task, error in self._task_ends(json.loads(line)["event"]):
-                self._ended.put((task, error))
-        self._stream.wait()
-        if not self._closing:
+        line = ""
+        try:
+            for line in self._stream.stdout:
+                for task, error in self._task_ends(json.loads(line)["event"]):
+                    self._ended.put((task, error))
+        except Exception as e:  # anything: this thread must not end silently
+            log.exception(f"cannot read this hq journal stream line: {line!r}")
+            failure = f"hq journal stream unreadable ({type(e).__name__}: {e})"
+            self._stream.terminate()
+            self._stream.wait()
+        else:
+            self._stream.wait()
             stderr = self._stream.stderr.read().strip() if self._stream.stderr else ""
+            failure = f"hq journal stream ended: {stderr}"
+        if not self._closing:
             for task in list(self._live):
-                self._ended.put((task, f"hq journal stream ended: {stderr}"))
+                self._ended.put((task, failure))
 
     def _task_ends(self, event: dict[str, Any]) -> list[tuple[int, str | None]]:
         """(task, None) for a finished task of this job, (task, error) for a
