@@ -25,10 +25,16 @@ VERSION: str = tomllib.loads(Path(__file__).with_name("hq-release.toml").read_te
 
 log = logging.getLogger("gutsrun.hq")
 
-SERVER_START_TIMEOUT = 60  # s for the HQ server to write hq-current
-SERVER_START_POLL = 0.1  # s between looks for hq-current
-PROCESS_STOP_TIMEOUT = 10  # s for a stopped server or worker to exit before it is killed
-EVENT_READER_STOP_TIMEOUT = 5  # s for the event-stream thread to end at close()
+# How long the HQ server may take to start. It has started when it has
+# written hq-current, a symlink in its server directory to the running
+# server's files; clients and workers find the server through it.
+SERVER_START_TIMEOUT_SECONDS = 60
+# How often to look for hq-current while the server starts.
+SERVER_START_POLL_SECONDS = 0.1
+# How long a stopped server or worker may take to exit before it is killed.
+PROCESS_STOP_TIMEOUT_SECONDS = 10
+# How long close() waits for the thread that reads the event stream to end.
+EVENT_READER_STOP_TIMEOUT_SECONDS = 5
 
 
 class HQError(Exception):
@@ -94,8 +100,9 @@ TASK_END_TYPES = ("task-finished", "task-failed", "task-canceled")
 
 
 def find_hq_binary(root: str | Path) -> str:
-    """The hq binary: bin/hq in the checkout, else the one on PATH, checked
-    to be VERSION. The other functions here take the binary it returns."""
+    """Returns the hq binary: bin/hq in the checkout, else the one on PATH.
+    Raises HQError if there is none, or if it is not VERSION. The other
+    functions here take the binary this returns."""
     bundled = Path(root) / "bin" / "hq"
     hq = str(bundled) if bundled.exists() else shutil.which("hq")
     if hq is None:
@@ -107,7 +114,7 @@ def find_hq_binary(root: str | Path) -> str:
 
 
 def free_port() -> int:
-    """A TCP port nothing on this node listens on now. The server binds it
+    """Returns a TCP port nothing on this node listens on now. The server binds it
     a moment later; another process taking it in between makes the server
     fail to start, and the link with it."""
     with socket.socket() as s:
@@ -115,19 +122,20 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def worker_gpus(hq: str, server_dir: str | Path, gpu_resource: str = "gpus/nvidia") -> list[int]:
-    """How many GPUs (`gpu_resource`) each connected worker of the server
-    has. HQ detects a node's NVIDIA GPUs when the worker starts."""
+def count_gpus_per_worker(hq: str, server_dir: str | Path,
+                          gpu_resource: str = "gpus/nvidia") -> list[int]:
+    """Returns how many GPUs (`gpu_resource`) each connected worker of the
+    server has. HQ detects a node's NVIDIA GPUs when the worker starts."""
     done = subprocess.run([hq, "--server-dir", str(server_dir), "--output-mode", "json",
                            "worker", "list"], capture_output=True, text=True)
     if done.returncode != 0:
         raise HQError(f"hq worker list: {done.stderr.strip()}")
     workers: list[Worker] = json.loads(done.stdout)
-    return [gpu_count(worker, gpu_resource) for worker in workers]
+    return [count_gpus(worker, gpu_resource) for worker in workers]
 
 
-def gpu_count(worker: Worker, gpu_resource: str) -> int:
-    """How many GPUs (`gpu_resource`) one worker of `hq worker list` has.
+def count_gpus(worker: Worker, gpu_resource: str) -> int:
+    """Returns how many GPUs (`gpu_resource`) one worker of `hq worker list` has.
     HQ lists them as a resource whose `values` are the GPUs' indices."""
     count = 0
     for resource in worker["configuration"]["resources"]["resources"]:
@@ -139,7 +147,7 @@ def gpu_count(worker: Worker, gpu_resource: str) -> int:
 @contextlib.contextmanager
 def running_server_and_worker(hq: str, server: Path, log_prefix: str, cores: int,
                               env: dict[str, str] | None = None) -> Generator[None]:
-    """Run an HQ server and one worker on this node for the `with` block.
+    """Runs an HQ server and one worker on this node for the `with` block.
     The worker, and so its tasks, runs in `env`. Stops both and removes the
     server directory when the block ends, also on errors.
 
@@ -165,11 +173,11 @@ def running_server_and_worker(hq: str, server: Path, log_prefix: str, cores: int
                 [hq, "server", "start", "--server-dir", str(server), "--access-file", str(access)],
                 stdout=out, stderr=subprocess.STDOUT, start_new_session=True))
         # The server writes hq-current on this node, so no NFS cache hides it.
-        deadline = time.monotonic() + SERVER_START_TIMEOUT
+        deadline = time.monotonic() + SERVER_START_TIMEOUT_SECONDS
         while not (server / "hq-current").exists():
             if processes[0].poll() is not None or time.monotonic() > deadline:
                 raise HQError(f"hq server did not start; see {log_prefix}-hq-server.log")
-            time.sleep(SERVER_START_POLL)
+            time.sleep(SERVER_START_POLL_SECONDS)
         with open(f"{log_prefix}-hq-worker.log", "wb") as out:
             processes.append(subprocess.Popen(
                 [hq, "worker", "start", "--server-dir", str(server), "--cpus", str(cores)],
@@ -181,7 +189,7 @@ def running_server_and_worker(hq: str, server: Path, log_prefix: str, cores: int
                        capture_output=True)
         for process in processes:
             try:
-                process.wait(timeout=PROCESS_STOP_TIMEOUT)
+                process.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
@@ -189,11 +197,13 @@ def running_server_and_worker(hq: str, server: Path, log_prefix: str, cores: int
 
 
 @contextlib.contextmanager
-def running_workers_on_other_nodes(hq: str, server: Path, log_prefix: str, others: int,
+def running_workers_on_other_nodes(hq: str, server: Path, log_prefix: str, other_nodes: int,
                                    cores: int, env: dict[str, str] | None = None
                                    ) -> Generator[None]:
-    """An HQ worker on each of the job's `others` other nodes for the `with`
-    block, in one srun step, in `env` (srun passes the environment on to the
+    """Runs an HQ worker on each of the job's nodes other than this one, of
+    which there are `other_nodes`, for the `with` block. (This node runs the
+    server and its own worker: `running_server_and_worker`.) The workers
+    run in one srun step, in `env` (srun passes the environment on to the
     step); each logs to `<log_prefix>-hq-worker-<node>.log`.
 
     A worker that dies during the block ends neither the block nor the
@@ -207,11 +217,11 @@ def running_workers_on_other_nodes(hq: str, server: Path, log_prefix: str, other
     # --relative=1: the nodes after the first, which runs this link.
     # --cpus-per-task: a step gets one CPU per task unless told otherwise,
     # and the worker and its tasks would be confined to it.
-    argv = ["srun", f"--nodes={others}", f"--ntasks={others}", "--ntasks-per-node=1",
+    argv = ["srun", f"--nodes={other_nodes}", f"--ntasks={other_nodes}", "--ntasks-per-node=1",
             "--relative=1", f"--cpus-per-task={cores}", "--kill-on-bad-exit=0",
             f"--output={log_prefix}-hq-worker-%N.log",
             hq, "worker", "start", "--server-dir", str(server), "--cpus", str(cores)]
-    log.info(f"hq workers on {others} more node(s): {shlex.join(argv)}")
+    log.info(f"hq workers on {other_nodes} more node(s): {shlex.join(argv)}")
     step = subprocess.Popen(argv, env=env)
     try:
         yield
@@ -224,8 +234,8 @@ def running_workers_on_other_nodes(hq: str, server: Path, log_prefix: str, other
 
 
 class HQBackend:
-    """Tasks on the HQ server in `server_dir` (default: $HQ_SERVER_DIR, then
-    HQ's own default), all through the `hq` CLI, the binary `hq`.
+    """Runs the tasks of a `gutsrun.executor.TaskExecutor` on an HQ server,
+    through the `hq` CLI: the executor's backend (`gutsrun.executor.Backend`).
 
     - One open HQ job per backend; each executor task is the task of that
       job whose id is the executor's task id as a number (`--array <tid>`),
@@ -235,20 +245,26 @@ class HQBackend:
       ends while the backend is open, the tasks in flight fail.
     - A task reports its error by writing it to $HQ_ERROR_FILENAME (set with
       `--task-dir`) and exiting non-zero; the text arrives in the
-      `task-failed` event, cut to about 2 KiB.
+      `task-failed` event. HQ cuts it to about the first 2 KiB, so a long
+      traceback loses its end, where the exception is; the task's stderr
+      log, kept for failed tasks, has all of it.
     - Logs of finished tasks are deleted by HQ (`:rm-if-finished`); those of
       failed and cancelled tasks are kept.
     - HQ reruns a task whose worker was lost while it ran. After 5 lost
       workers (HQ's default `--crash-limit`), the task fails instead.
     - HQ 0.26.2 cancels whole jobs only, so `close()` cancels every task in
-      flight at once, with SIGINT to each task's process group.
-
-    `gpu_resource`: the HQ resource name for Resources.gpus. `time_request`:
-    HQ's `--time-request` for every task, e.g. "30m": a worker with less
-    time left does not start it (off when None)."""
+      flight at once, with SIGINT to each task's process group."""
 
     def __init__(self, hq: str, server_dir: str | Path | None = None, *,
                  gpu_resource: str = "gpus/nvidia", time_request: str | None = None) -> None:
+        """Opens the backend's HQ job and starts reading HQ's events.
+
+        `hq`: the hq binary (`find_hq_binary`). `server_dir`: the HQ
+        server's directory; when None, hq looks in $HQ_SERVER_DIR, then in
+        its own default. `gpu_resource`: the HQ resource name that
+        `Resources.gpus` asks for. `time_request`: HQ's `--time-request`
+        for every task, e.g. "30m": a worker with less time left does not
+        start the task (off when None)."""
         # The start of every hq command line.
         self.hq_argv = [hq, "--output-mode", "quiet"]
         if server_dir is not None:
@@ -294,12 +310,14 @@ class HQBackend:
             raise
 
     def poll(self) -> list[tuple[str, str | None]]:
-        """The tasks that ended since the last call, as (tid, None) or
-        (tid, error); see Backend.poll. The reader thread puts every end it
-        sees on `_ended`; this takes them off and turns HQ's task id back
-        into the executor's tid. A task's end is reported once: a second
-        one (e.g. a lost event stream after a task already failed) finds the
-        task gone from `_live` and is dropped."""
+        """Returns the tasks that ended since the last call, as (tid, None)
+        or (tid, error); see `gutsrun.executor.Backend.poll`.
+
+        The reader thread puts every end it sees on `_ended`; this takes
+        them off and turns HQ's task id back into the executor's tid. A
+        task's end is reported once: a second one (e.g. a lost event stream
+        after a task already failed) finds the task gone from `_live` and is
+        dropped."""
         ended: list[tuple[str, str | None]] = []
         while not self._ended.empty():
             task, error = self._ended.get()
@@ -309,7 +327,7 @@ class HQBackend:
         return ended
 
     def close(self, reason: str = "executor shut down") -> None:
-        """Cancel the tasks in flight, close the job, stop reading events.
+        """Cancels the tasks in flight, closes the job, stops reading events.
         A failed hq call is logged, not raised: at shutdown the server may
         be gone already, and the rest of the shutdown still has to run."""
         self._closing = True
@@ -324,10 +342,10 @@ class HQBackend:
             log.warning(f"could not close HQ job {self.job}: {e}")
         if self._stream.poll() is None:
             self._stream.terminate()
-        self._reader.join(timeout=EVENT_READER_STOP_TIMEOUT)
+        self._reader.join(timeout=EVENT_READER_STOP_TIMEOUT_SECONDS)
 
     def _read_events(self) -> None:
-        """Turn the job's task events into (task, None | error) on `_ended`.
+        """Turns the job's task events into (task, None | error) on `_ended`.
         If the stream ends while the backend is open, or has a line this
         cannot read, every task in flight fails: an end it missed would
         leave its task waiting forever. The run stops, and its next start
@@ -354,8 +372,9 @@ class HQBackend:
                 self._ended.put((task, failure))
 
     def _task_ends(self, event: TaskEndEvent) -> list[tuple[int, str | None]]:
-        """The tasks of this job that `event` ends: (task, None) for a
-        finished one, (task, error) for a failed or cancelled one."""
+        """Returns the tasks of this job that `event` ends: (task, None) for
+        a finished one, (task, error) for a failed or cancelled one; [] if
+        it ends none of them."""
         if event["type"] == "task-canceled":
             return [(task["job_task_id"], "cancelled") for task in event["tasks"]
                     if task["job_id"] == self.job]

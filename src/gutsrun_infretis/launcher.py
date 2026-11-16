@@ -126,7 +126,7 @@ def check_gpus(hq_bin: str, server_dir: str, gpus: int,
     its walltime."""
     deadline = time.monotonic() + wait
     while True:
-        found = hq.worker_gpus(hq_bin, server_dir)
+        found = hq.count_gpus_per_worker(hq_bin, server_dir)
         if any(n >= gpus for n in found):
             log.info("hq workers' GPUs: %s", found)
             return
