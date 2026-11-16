@@ -8,15 +8,14 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
 
-      # Keep in sync with HQ_VERSION / HQ_SHA256 in scripts/get-hq.sh and
-      # VERSION in src/gutsrun/hq.py, so the laptop and the clusters run
-      # the same binary.
+      # The same release as on the clusters (scripts/get-hq.sh).
+      release = builtins.fromTOML (builtins.readFile ./src/gutsrun/hq-release.toml);
       hq = pkgs.stdenv.mkDerivation rec {
         pname = "hyperqueue";
-        version = "0.26.2";
+        inherit (release) version;
         src = pkgs.fetchurl {
           url = "https://github.com/It4innovations/hyperqueue/releases/download/v${version}/hq-v${version}-linux-x64.tar.gz";
-          hash = "sha256-4V2ukRPhowepema/6Q9094xgFiOUNrXZ8eTv7EgOhLU=";
+          inherit (release) sha256;
         };
         sourceRoot = ".";
         nativeBuildInputs = [ pkgs.autoPatchelfHook ];

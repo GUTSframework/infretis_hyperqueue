@@ -153,6 +153,7 @@ pyproject.toml          the gutsrun package (src/), the gutsrun-infretis command
 requirements.txt        direct pins (infretis, inftools)
 requirements-lock.txt   exact versions, installed by setup-venv.sh
 scripts/get-hq.sh       pinned hq binary into ./bin, for clusters without Nix
+src/gutsrun/hq-release.toml  the pinned hq release (version, sha256), read by flake.nix, get-hq.sh, hq.py
 scripts/setup-venv.sh   .venv from the lock file, plus this checkout (editable); bin/gutsrun-infretis
 scripts/sync.sh         git push to the clone on a login node, rsync runs/<site>/ back
 scripts/wait-jobs.sh    poll a login node's squeue until jobs finish, optionally pull

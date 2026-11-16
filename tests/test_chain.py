@@ -91,7 +91,7 @@ child=$!
 while kill -0 "$child" 2>/dev/null; do wait "$child"; rc=$?; done
 exit "$rc"
 """
-FAKE_HQ = '#!/usr/bin/env bash\necho "hyperqueue v0.26.2"\n'
+FAKE_HQ = f'#!/usr/bin/env bash\necho "hyperqueue v{hq.VERSION}"\n'
 
 
 class Project:

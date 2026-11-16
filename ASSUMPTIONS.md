@@ -11,7 +11,7 @@ What this repo takes as given. If one turns out wrong, update this file
 | inftools | git `ca33eae` (main, 2026-09-25) | `inft infinit` makes initial paths (`puckering`); `inft wham` is the usual analysis of a run | `main` at the time; nothing newer needed |
 | Python | 3.12 | everything | numpy 1.26.4 has no wheels for 3.13 |
 | numpy | 1.26.4 | infretis | infretis pins numpy below 2 (`^1.21.2`) |
-| HQ | 0.26.2, binary only (driven through its CLI) | tasks, workers, completion events | measured in `../hyperqueue_test`; open jobs and `hq journal` need 0.21 or later. Before moving to 0.27.x, rerun the 1024-task autoalloc regression check, and check the event format of `hq journal stream`, which is HQ's own |
+| HQ | 0.26.2, binary only (driven through its CLI) | tasks, workers, completion events | measured in `../hyperqueue_test`; open jobs and `hq journal` need 0.21 or later. Before moving to 0.27.x, rerun the 1024-task autoalloc regression check, and check the event format of `hq journal stream`, which is HQ's own. The pin is `src/gutsrun/hq-release.toml` |
 | nixpkgs | `151fa4e` (`flake.lock`) | the dev shell: Python, GROMACS, LAMMPS, ruff, pyright, jq | none in particular; the lock keeps the dev shell reproducible. Updating it changes the GROMACS and LAMMPS versions below |
 | GROMACS | 2026.3 (nixpkgs; conda-forge on DAS-6) | `water_boiling`, `puckering` | nixpkgs' version, matched on DAS-6; production clusters use their own module |
 | LAMMPS | 22Jul2025_update4 (nixpkgs), 29Aug2024 (conda-forge on DAS-6), REAXFF + QEQ enabled | `water_dissociation` (needs REAXFF and QEQ) | on DAS-6 the newest conda-forge build whose `lmp` runs there (below) |

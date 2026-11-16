@@ -13,13 +13,15 @@ import socket
 import subprocess
 import threading
 import time
+import tomllib
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict, cast
 
 from gutsrun.executor import Resources
 
-VERSION = "0.26.2"  # keep in sync with flake.nix and scripts/get-hq.sh
+# The pinned HyperQueue release; flake.nix and scripts/get-hq.sh read the same file.
+VERSION: str = tomllib.loads(Path(__file__).with_name("hq-release.toml").read_text())["version"]
 
 log = logging.getLogger("gutsrun.hq")
 

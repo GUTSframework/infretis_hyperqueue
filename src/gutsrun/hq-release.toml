@@ -1,0 +1,8 @@
+# The HyperQueue release every machine runs. Read by flake.nix (the laptop),
+# scripts/get-hq.sh (the clusters) and src/gutsrun/hq.py (which refuses any
+# other hq), so a new release is a change here only.
+
+version = "0.26.2"
+
+# sha256 of hq-v<version>-linux-x64.tar.gz from the GitHub release, in hex.
+sha256 = "e15dae9113e1a307a97a66bfe90f74f78c6016239436b5d9f1e4efec480e84b5"
