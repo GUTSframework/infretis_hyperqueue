@@ -22,15 +22,21 @@ import gutsrun_infretis.cli as cli
 from gutsrun.chain import (
     STOPPED_BY_SIGNAL,
     ChainError,
+    ChainEvent,
     ChainSpec,
+    EndedEvent,
+    NotSubmittedEvent,
+    StartedEvent,
     StateError,
     StatusReport,
+    SubmittedEvent,
     chain_status,
     checkout_revision,
     current_chain_events,
     follow_chain_status,
     link_sbatch_argv,
     load_spec,
+    now,
     record_event,
     seconds_to_slurm_walltime,
     slurm_walltime_to_seconds,
@@ -234,7 +240,7 @@ def test_start_submits_link_1_with_site_options(project, monkeypatch):
     assert "--constraint=A4000" in link_sbatch_argv(gpu, Site(project.root, "test"), 1)
     assert [e["event"] for e in current_chain_events(spec)] == ["chain", "submitted"]
     first = current_chain_events(spec)[0]
-    assert first["walltime"] == "00:05:00"
+    assert first["event"] == "chain" and first["walltime"] == "00:05:00"
     datetime.fromisoformat(first["time"])  # when the chain started, not its walltime
 
 
@@ -435,23 +441,27 @@ def test_why_a_chain_is_over(project):
     spec = project.make_spec(links=2)
     project.rundir.joinpath(".gutsrun").mkdir()
 
-    def submitted(link: int) -> dict:
-        return {"event": "submitted", "link": link, "job": str(link)}
+    def submitted(link: int) -> SubmittedEvent:
+        return SubmittedEvent(time=now(), event="submitted", link=link, job=str(link))
 
-    def started(link: int) -> dict:
-        return {"event": "started", "link": link, "job": str(link), "host": "node1"}
+    def started(link: int) -> StartedEvent:
+        return StartedEvent(time=now(), event="started", link=link, job=str(link), host="node1")
 
-    def ended(link: int, result: str) -> dict:
-        return {"event": "ended", "link": link, "job": str(link), "result": result}
+    def ended(link: int, result: str) -> EndedEvent:
+        return EndedEvent(time=now(), event="ended", link=link, job=str(link), exit=0,
+                          result=result, progress="")
 
     walltime = [submitted(1), started(1), submitted(2), ended(1, STOPPED_BY_SIGNAL)]
-    assert why_chain_is_over(spec, [{"event": "chain"}]) == "no link was submitted"
+    chain_only = [ChainEvent(time=now(), event="chain", name="r", site="test",
+                             walltime="00:05:00", links=2, revision="x", progress="")]
+    assert why_chain_is_over(spec, chain_only) == "no link was submitted"
     done = [submitted(1), started(1), ended(1, "done")]
     assert why_chain_is_over(spec, done) == "the run is done"
     assert why_chain_is_over(spec, [*walltime, started(2), ended(2, STOPPED_BY_SIGNAL)]) == (
         "link 2 stopped at the walltime; the last link (links = 2); `submit` again to continue")
     refused = [submitted(1), started(1),
-               {"event": "not submitted", "link": 2, "error": "sbatch: error: quota"},
+               NotSubmittedEvent(time=now(), event="not submitted", link=2,
+                                 error="sbatch: error: quota"),
                ended(1, STOPPED_BY_SIGNAL)]
     assert why_chain_is_over(spec, refused) == (
         "link 1 stopped at the walltime; link 2 could not be submitted "
@@ -486,7 +496,7 @@ def test_stop_cancels_queued_links_and_signals_the_running_one(project, monkeypa
     spec = project.make_spec()
     project.use_fakes(monkeypatch, squeue="1001 RUNNING 0:10 node1")
     start_chain(spec)
-    record_event(spec, "submitted", link=2, job="1002")
+    record_event(spec, SubmittedEvent(time=now(), event="submitted", link=2, job="1002"))
     monkeypatch.setenv("FAKE_SQUEUE", "1001 RUNNING 0:10 node1\n1002 PENDING 0:00 (Dependency)")
     assert stop_chain(spec) == ["link 1 (job 1001): sent SIGTERM", "link 2 (job 1002): cancelled"]
     assert project.calls("scancel") == ["scancel --batch --signal=TERM 1001", "scancel 1002"]

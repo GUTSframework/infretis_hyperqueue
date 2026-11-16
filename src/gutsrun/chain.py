@@ -68,11 +68,12 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from types import FrameType
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, TypedDict
 
 from gutsrun import hq
 from gutsrun.site import Site, SiteError, env_after_site_setup
@@ -250,21 +251,85 @@ def checkout_revision(root: str | Path) -> str:
 # --- the record and the queue ----------------------------------------------------------
 
 
-def record_event(spec: ChainSpec, event: str, **fields: Any) -> None:
-    """Append an event to the chain's record, links.jsonl, with the time it
-    happened in `time`."""
-    if fields.keys() & {"time", "event"}:
-        raise ValueError(f"event fields may not be called time or event: {sorted(fields)}")
-    entry = {"time": datetime.now().isoformat(timespec="seconds"), "event": event, **fields}
+# The chain's record, links.jsonl, holds one JSON object per line: one of
+# these events. Each has `time` (when it happened, ISO 8601 to the second)
+# and `event` (which one); `link` is a link's number, `job` its Slurm job id.
+
+
+class ChainEvent(TypedDict):
+    """A chain was started (`start_chain`); its events follow."""
+
+    time: str
+    event: Literal["chain"]
+    name: str
+    site: str
+    walltime: str  # per link
+    links: int  # the most links
+    revision: str  # of the gutsrun checkout
+    progress: str  # the run's, before the chain
+
+
+class SubmittedEvent(TypedDict):
+    """sbatch accepted a link."""
+
+    time: str
+    event: Literal["submitted"]
+    link: int
+    job: str
+
+
+class NotSubmittedEvent(TypedDict):
+    """sbatch refused a link."""
+
+    time: str
+    event: Literal["not submitted"]
+    link: int
+    error: str  # what sbatch said
+
+
+class StartedEvent(TypedDict):
+    """A link's job started."""
+
+    time: str
+    event: Literal["started"]
+    link: int
+    job: str
+    host: str  # the node it runs on
+
+
+class EndedEvent(TypedDict):
+    """A link ended in a way it could record (not when killed)."""
+
+    time: str
+    event: Literal["ended"]
+    link: int
+    job: str
+    exit: int  # the job's exit code
+    result: str  # how it ended, e.g. "done" or STOPPED_BY_SIGNAL
+    progress: str  # the run's, at the end
+
+
+Event = ChainEvent | SubmittedEvent | NotSubmittedEvent | StartedEvent | EndedEvent
+
+
+def now() -> str:
+    """The time now, as events record it."""
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def record_event(spec: ChainSpec, event: Event) -> None:
+    """Append an event to the chain's record, links.jsonl."""
     with open(spec.record_path, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+        f.write(json.dumps(event) + "\n")
 
 
-def current_chain_events(spec: ChainSpec) -> list[dict[str, Any]]:
+def current_chain_events(spec: ChainSpec) -> list[Event]:
     """The record of the chain last started: events since its "chain" event."""
     if not spec.record_path.exists():
         return []
-    entries = [json.loads(line) for line in spec.record_path.read_text().splitlines() if line]
+    # Trusted as written by record_event(); json.loads cannot check it.
+    entries: list[Event] = [json.loads(line)
+                            for line in spec.record_path.read_text().splitlines() if line]
     starts = [i for i, e in enumerate(entries) if e["event"] == "chain"]
     return entries[starts[-1]:] if starts else entries
 
@@ -285,7 +350,7 @@ def squeue_jobs(user: str | None = None) -> dict[str, str] | None:
 def link_jobs(spec: ChainSpec) -> list[tuple[int, str]]:
     """(link, job id) of every link submitted or started in the chain, in order."""
     keys = [(e["link"], e["job"]) for e in current_chain_events(spec)
-            if e["event"] in ("submitted", "started")]
+            if e["event"] == "submitted" or e["event"] == "started"]
     return list(dict.fromkeys(keys))
 
 
@@ -320,7 +385,7 @@ def submit_link(spec: ChainSpec, site: Site, link: int, after: str | None = None
     out = subprocess.run(link_sbatch_argv(spec, site, link, after), capture_output=True,
                          text=True, check=True).stdout
     job = out.strip().split(";")[0]  # --parsable prints "<id>" or "<id>;<cluster>"
-    record_event(spec, "submitted", link=link, job=job)
+    record_event(spec, SubmittedEvent(time=now(), event="submitted", link=link, job=job))
     return job
 
 
@@ -389,15 +454,17 @@ def start_chain(spec: ChainSpec, *, submit_first: bool = True) -> str:
     spec.stop_file.unlink(missing_ok=True)
     spec.save()
     # Noted before submitting: link 1 may start, and note "started", at once.
-    record_event(spec, "chain", name=spec.name, site=spec.site, walltime=spec.time,
-                 links=spec.links, revision=plan.revision, progress=plan.progress.text)
+    record_event(spec, ChainEvent(time=now(), event="chain", name=spec.name, site=spec.site,
+                                  walltime=spec.time, links=spec.links,
+                                  revision=plan.revision, progress=plan.progress.text))
     if not submit_first:
         return str(spec.spec_path)
     try:
         return submit_link(spec, plan.site, 1)
     except (subprocess.CalledProcessError, OSError) as e:
         error = sbatch_error(e)
-        record_event(spec, "not submitted", link=1, error=error)
+        record_event(spec, NotSubmittedEvent(time=now(), event="not submitted", link=1,
+                                             error=error))
         raise ChainError(f"sbatch refused link 1, nothing submitted: {error}") from e
 
 
@@ -419,7 +486,7 @@ class StatusReport:
         return [self.progress, *warning, *self.links, *over]
 
 
-def why_chain_is_over(spec: ChainSpec, record: list[dict[str, Any]]) -> str:
+def why_chain_is_over(spec: ChainSpec, record: Sequence[Event]) -> str:
     """Why a chain with no job left is over, from its record: the run is
     done, the chain was stopped, or else what its last link recorded."""
     ended = {(e["link"], e["job"]): e["result"] for e in record if e["event"] == "ended"}
@@ -427,7 +494,8 @@ def why_chain_is_over(spec: ChainSpec, record: list[dict[str, Any]]) -> str:
         return "the run is done"
     if spec.stop_file.exists():
         return "stopped by request; `submit` again to continue"
-    jobs = [(e["link"], e["job"]) for e in record if e["event"] in ("submitted", "started")]
+    jobs = [(e["link"], e["job"]) for e in record
+            if e["event"] == "submitted" or e["event"] == "started"]
     if not jobs:
         return "no link was submitted"
     link, job = jobs[-1]
@@ -505,7 +573,7 @@ def stop_chain(spec: ChainSpec) -> list[str]:
     if queued is None:
         raise ChainError("squeue does not answer; no link will start, but a running "
                          "one keeps running")
-    done = []
+    done: list[str] = []
     for link, job in link_jobs(spec):
         if job not in queued:
             continue
@@ -573,7 +641,8 @@ class Link:
         spec, host = self.spec, socket.gethostname()
         log.info(f"link {self.number}/{spec.links} of {spec.name} on {host}, job {self.job}, "
                  f"code {checkout_revision(spec.root)}")
-        record_event(spec, "started", link=self.number, job=self.job, host=host)
+        record_event(spec, StartedEvent(time=now(), event="started", link=self.number,
+                                        job=self.job, host=host))
         # Anything not foreseen below (a bug, a workload that raises, a missing
         # interpreter) still ends the link in the record and cancels the next
         # one, which would otherwise fail the same way.
@@ -595,8 +664,9 @@ class Link:
 
     def record_end(self, code: int, result: str, progress: str) -> int:
         """Record how the link ended; returns `code`, the job's exit code."""
-        record_event(self.spec, "ended", link=self.number, job=self.job, exit=code,
-                     result=result, progress=progress)
+        record_event(self.spec, EndedEvent(time=now(), event="ended", link=self.number,
+                                           job=self.job, exit=code, result=result,
+                                           progress=progress))
         return code
 
     def cancel_next(self, reason: str) -> None:
@@ -638,7 +708,8 @@ class Link:
             error = sbatch_error(e)
             log.warning(f"warning: could not submit link {following} ({error}); this "
                         "one runs anyway, and the chain ends with it")
-            record_event(spec, "not submitted", link=following, error=error)
+            record_event(spec, NotSubmittedEvent(time=now(), event="not submitted",
+                                                 link=following, error=error))
 
     def run_workload(self) -> int:
         """Steps 3 to 5: the site's setup, HQ if the workload needs it, then
