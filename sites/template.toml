@@ -28,6 +28,6 @@ cores_per_node = 24
 # Default: none. Module names differ between clusters (`module avail` or
 # `module spider <name>` lists them). The HQ workers on every node of the
 # job, so every task, and the workload run in the environment these lines
-# leave; their output goes to the link's log, and a failing line fails the
+# leave; their output goes to the link's log, and a failing command fails the
 # link. Several lines: a TOML multi-line string ("""...""").
 # setup = "module load GROMACS"

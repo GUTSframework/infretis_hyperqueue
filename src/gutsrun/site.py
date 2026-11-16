@@ -41,8 +41,17 @@ class Site:
 
 def env_after_site_setup(setup: str, env: dict[str, str]) -> dict[str, str]:
     """The environment after running the site's `setup` lines (e.g. `module
-    load`) in bash, starting from `env`. Their output goes to the link's log."""
-    script = f"{{\n{setup}\n}} >&2 || exit 1\nenv -0"
+    load`) in bash, starting from `env`. Their output goes to stderr, which
+    is the link's log. The first command that fails ends the setup, as with
+    bash's `set -e`; the log names that command."""
+    script = "\n".join([
+        # File descriptor 3 keeps stdout for the environment; everything else goes to stderr.
+        "exec 3>&1 >&2",
+        "set -e",
+        "trap 'echo \"site setup failed at: $BASH_COMMAND\"' ERR",
+        setup,
+        "env -0 >&3",
+    ])
     done = subprocess.run(["bash", "-c", script], env=env, stdout=subprocess.PIPE)
     if done.returncode != 0:
         raise SiteError(f"the site's setup failed (exit {done.returncode}): {setup!r}")

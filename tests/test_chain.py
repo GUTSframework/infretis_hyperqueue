@@ -197,6 +197,12 @@ def test_env_after_site_setup_keeps_values_with_newlines_and_equals_signs():
     assert env["A"] == "x=1\ny" and "B" not in env
 
 
+def test_any_failing_site_setup_line_fails_with_its_exit_code(capfd):
+    with pytest.raises(SiteError, match="exit 3"):
+        env_after_site_setup("(exit 3)\nexport A=1", {"PATH": os.environ["PATH"]})
+    assert "site setup failed at: ( exit 3 )" in capfd.readouterr().err
+
+
 def test_site_setup_sets_the_workloads_environment(project):
     path = project.root / "sites" / "test.toml"
     path.write_text(path.read_text() + SETUP)
