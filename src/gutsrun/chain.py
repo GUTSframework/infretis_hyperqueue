@@ -80,10 +80,11 @@ STOPPED_BY_SIGNAL = "stopped by a signal (walltime or scancel)"
 # The project checkout this module runs from (src/gutsrun/chain.py): sites/,
 # .venv and bin/ live there.
 ROOT = Path(__file__).resolve().parents[2]
-# s: Slurm may send `--signal` up to this much earlier than asked (its docs;
-# measured up to 28 s on DAS-6 and Snellius with scripts/probe-signal-timing.sh)
-SLURM_SIGNAL_SLACK = 60
-FOLLOW_INTERVAL = 30  # s between checks of `status --follow`
+# How much earlier than asked Slurm may send `--signal` (its docs). Measured:
+# up to 28 s on DAS-6 and Snellius, with scripts/probe-signal-timing.sh.
+SLURM_SIGNAL_SLACK_SECONDS = 60
+# How long `status --follow` waits between two looks at the chain.
+FOLLOW_INTERVAL_SECONDS = 30
 
 log = logging.getLogger("gutsrun.chain")
 
@@ -224,10 +225,10 @@ def seconds_to_slurm_walltime(secs: int) -> str:
 
 def check_walltime_exceeds_margin(spec: ChainSpec) -> None:
     """Refuse a walltime too short to run anything before SIGTERM."""
-    if slurm_walltime_to_seconds(spec.time) <= spec.margin + SLURM_SIGNAL_SLACK:
+    if slurm_walltime_to_seconds(spec.time) <= spec.margin + SLURM_SIGNAL_SLACK_SECONDS:
         raise ChainError(f"time {spec.time} leaves no time to run before SIGTERM "
                          f"(margin {spec.margin} s, which Slurm may bring forward by "
-                         f"{SLURM_SIGNAL_SLACK} s)")
+                         f"{SLURM_SIGNAL_SLACK_SECONDS} s)")
 
 
 def checkout_revision(root: str | Path) -> str:
@@ -546,7 +547,7 @@ def chain_status(spec: ChainSpec) -> StatusReport:
     return StatusReport(progress, links, "over", why_chain_is_over(spec, record))
 
 
-def follow_chain_status(spec: ChainSpec, interval: float = FOLLOW_INTERVAL) -> None:
+def follow_chain_status(spec: ChainSpec, interval: float = FOLLOW_INTERVAL_SECONDS) -> None:
     """Print the report whenever it changes, until no job of the chain is
     left."""
     shown: list[str] | None = None

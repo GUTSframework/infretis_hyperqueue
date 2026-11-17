@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, get_args, get_type_hints
 
 from gutsrun.chain import (
-    FOLLOW_INTERVAL,
+    FOLLOW_INTERVAL_SECONDS,
     ROOT,
     ChainError,
     ChainSpec,
@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> None:
                           "each), state (active, over, or unknown if squeue does not "
                           "answer), reason (why it is over; null otherwise), and lines "
                           "(the report as text)")
-    stat.add_argument("--interval", type=float, default=FOLLOW_INTERVAL,
+    stat.add_argument("--interval", type=float, default=FOLLOW_INTERVAL_SECONDS,
                       help="seconds between checks (default: %(default)s)")
 
     halt = commands.add_parser("stop", help="stop the chain in the run directory")

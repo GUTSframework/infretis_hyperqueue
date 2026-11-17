@@ -64,8 +64,10 @@ from gutsrun_infretis.workload import InfretisRun
 
 TESTED_COMMIT = "2502487"  # the fork's commit in requirements.txt
 EXIT_DONE, EXIT_STOPPED, EXIT_REFUSED = 0, 3, 4
-GPU_CHECK_WAIT = 60  # s for an HQ worker with enough GPUs to connect
-GPU_CHECK_POLL = 1  # s between looks at the workers
+# How long to wait for an HQ worker with enough GPUs to connect.
+GPU_CHECK_TIMEOUT_SECONDS = 60
+# How long to wait between two looks at the HQ workers' GPUs.
+GPU_CHECK_POLL_SECONDS = 1
 
 log = logging.getLogger("gutsrun_infretis")
 
@@ -120,7 +122,7 @@ def check_infretis() -> None:
 
 
 def check_gpus(hq_bin: str, server_dir: str, gpus: int,
-               wait: float = GPU_CHECK_WAIT) -> None:
+               wait: float = GPU_CHECK_TIMEOUT_SECONDS) -> None:
     """Exit unless an HQ worker with at least `gpus` GPUs connects within
     `wait` seconds: HQ would hold every move, and the link would idle until
     its walltime."""
@@ -133,7 +135,7 @@ def check_gpus(hq_bin: str, server_dir: str, gpus: int,
         if time.monotonic() > deadline:
             sys.exit(f"--gpus-per-task is {gpus}, but no HQ worker has that many GPUs "
                      f"(GPUs per worker: {found or 'no worker'}); no move would ever start")
-        time.sleep(GPU_CHECK_POLL)
+        time.sleep(GPU_CHECK_POLL_SECONDS)
 
 
 PINNING = re.compile(r"(?<!\S)(-pin\s+(on|auto)|-pinoffset|-pinstride)(?!\S)")
