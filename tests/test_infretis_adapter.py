@@ -80,6 +80,7 @@ def test_check_wmdrun():
     with pytest.raises(SystemExit, match="-ntomp 2 but --cores-per-task is 4"):
         check_wmdrun(["gmx mdrun -ntomp 2 -ntmpi 1"], 4)
     check_wmdrun(["gmx_pin mdrun -ntomp 2 -deffnm x-pin"], 2)  # not flags
+    check_wmdrun(["gmx mdrun -deffnm x-ntomp 4 -ntomp 2"], 2)  # the first is no flag
 
 
 def test_check_gpus(hq_cluster):

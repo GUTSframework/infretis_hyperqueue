@@ -139,20 +139,27 @@ def check_gpus(hq_bin: str, server_dir: str, gpus: int,
         time.sleep(GPU_CHECK_POLL_SECONDS)
 
 
-PINNING = re.compile(r"(?<!\S)(-pin\s+(on|auto)|-pinoffset|-pinstride)(?!\S)")
-
-
-def check_wmdrun(wmdrun: list, cores: int) -> None:
+def check_wmdrun(wmdrun: list[object], cores: int) -> None:
     """Exit if a GROMACS command in `wmdrun` cannot run as an HQ task as it
     is: with pinning flags, or with -ntomp other than the task's cores."""
+    # GROMACS's pinning flags: "-pin on" or "-pin auto" (with any spaces
+    # between), "-pinoffset" or "-pinstride". "-pin off" is allowed.
+    # (?<!\S) and (?!\S) match only before and after a whole word: the flag
+    # starts the command or follows a space, and ends it or is followed by
+    # one. So "gmx_pin" and "-deffnm x-pin" do not match.
+    pinning = r"(?<!\S)(-pin\s+(on|auto)|-pinoffset|-pinstride)(?!\S)"
+    # The flag "-ntomp" as a whole word, then its number, which is captured.
+    ntomp = r"(?<!\S)-ntomp\s+(\d+)(?!\S)"
     for cmd in wmdrun:
+        # Only infretis's GROMACS engine reads wmdrun. The configs of other
+        # engines fill it with placeholders, one per worker, such as 0.
         if not isinstance(cmd, str):
-            continue  # LAMMPS and ASE examples use placeholders
-        if m := PINNING.search(cmd):
+            continue
+        if m := re.search(pinning, cmd):
             sys.exit(f"wmdrun has {m.group()} in {cmd!r}: under HQ, use -pin off "
                      "and no -pinoffset or -pinstride; HQ places the tasks, and "
                      "fixed offsets would put moves on the same cores")
-        m = re.search(r"-ntomp\s+(\d+)", cmd)
+        m = re.search(ntomp, cmd)
         if m and int(m.group(1)) != cores:
             sys.exit(f"wmdrun has -ntomp {m.group(1)} but --cores-per-task is {cores}; "
                      "HQ sets OMP_NUM_THREADS to the task's cores and GROMACS aborts "
