@@ -18,4 +18,4 @@ from `-ntomp`. This matters under HQ: HQ 0.26.2 sets `OMP_NUM_THREADS` to
 the task's allocated CPU count for every task unless the task environment
 already sets it (`crates/hyperqueue/src/worker/start/program.rs:295`). So
 GROMACS `-ntomp` must equal the task's `--cpus`, or the task must set
-`OMP_NUM_THREADS` itself.
+`OMP_NUM_THREADS` itself. The gutsrun launcher sets it to `-ntomp`.

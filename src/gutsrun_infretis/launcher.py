@@ -22,8 +22,11 @@ only:
 
 - A `wmdrun` with `-pin on|auto`/`-pinoffset`/`-pinstride` is refused
   (HQ places tasks, so fixed offsets would put moves on the same cores),
-  and so is one whose `-ntomp` differs from --cores-per-task (HQ sets
-  OMP_NUM_THREADS to it; GROMACS aborts on a mismatch).
+  and so is one whose `-ntmpi` × `-ntomp` differs from --cores-per-task
+  (`-ntmpi` is 1 if not given). Each move's OMP_NUM_THREADS is set to
+  `-ntomp`: HQ would set it to the task's cores, and GROMACS aborts when it
+  differs from `-ntomp`. So `-ntmpi 2 -ntomp 4` runs a move as two
+  thread-MPI ranks of four threads each, on 8 cores.
 - `--time-request` (e.g. 30m) keeps a worker from starting a
   move unless it has that much time left. Off by default; set it to about
   the longest move plus the chain's SIGTERM margin.
@@ -139,17 +142,22 @@ def check_gpus(hq_bin: str, server_dir: str, gpus: int,
         time.sleep(GPU_CHECK_POLL_SECONDS)
 
 
-def check_wmdrun(wmdrun: list[object], cores: int) -> None:
+def check_wmdrun(wmdrun: list[object], cores: int) -> int | None:
     """Exit if a GROMACS command in `wmdrun` cannot run as an HQ task as it
-    is: with pinning flags, or with -ntomp other than the task's cores."""
+    is: with pinning flags, or with -ntmpi × -ntomp other than the task's
+    cores (-ntmpi is 1 if not given). Returns the commands' -ntomp, which
+    each move's OMP_NUM_THREADS must equal, or None if none gives -ntomp."""
     # GROMACS's pinning flags: "-pin on" or "-pin auto" (with any spaces
     # between), "-pinoffset" or "-pinstride". "-pin off" is allowed.
     # (?<!\S) and (?!\S) match only before and after a whole word: the flag
     # starts the command or follows a space, and ends it or is followed by
     # one. So "gmx_pin" and "-deffnm x-pin" do not match.
     pinning = r"(?<!\S)(-pin\s+(on|auto)|-pinoffset|-pinstride)(?!\S)"
-    # The flag "-ntomp" as a whole word, then its number, which is captured.
+    # The flag "-ntomp" or "-ntmpi" as a whole word, then its number, which
+    # is captured.
     ntomp = r"(?<!\S)-ntomp\s+(\d+)(?!\S)"
+    ntmpi = r"(?<!\S)-ntmpi\s+(\d+)(?!\S)"
+    threads: set[int] = set()
     for cmd in wmdrun:
         # Only infretis's GROMACS engine reads wmdrun. The configs of other
         # engines fill it with placeholders, one per worker, such as 0.
@@ -159,11 +167,21 @@ def check_wmdrun(wmdrun: list[object], cores: int) -> None:
             sys.exit(f"wmdrun has {m.group()} in {cmd!r}: under HQ, use -pin off "
                      "and no -pinoffset or -pinstride; HQ places the tasks, and "
                      "fixed offsets would put moves on the same cores")
-        m = re.search(ntomp, cmd)
-        if m and int(m.group(1)) != cores:
-            sys.exit(f"wmdrun has -ntomp {m.group(1)} but --cores-per-task is {cores}; "
-                     "HQ sets OMP_NUM_THREADS to the task's cores and GROMACS aborts "
-                     "when they differ")
+        ranks = int(m.group(1)) if (m := re.search(ntmpi, cmd)) else 1
+        if not (m := re.search(ntomp, cmd)):
+            if ranks > 1:
+                sys.exit(f"wmdrun has -ntmpi {ranks} but no -ntomp in {cmd!r}: each "
+                         "rank would start as many threads as the task has cores")
+            continue
+        threads.add(int(m.group(1)))
+        if ranks * int(m.group(1)) != cores:
+            sys.exit(f"wmdrun has -ntmpi {ranks} × -ntomp {m.group(1)} in {cmd!r}, "
+                     f"but --cores-per-task is {cores}: they must be equal")
+    if len(threads) > 1:
+        sys.exit(f"wmdrun's commands have different -ntomp ({sorted(threads)}): every "
+                 "move gets the same OMP_NUM_THREADS, and GROMACS aborts when it "
+                 "differs from -ntomp")
+    return threads.pop() if threads else None
 
 
 # --- main -------------------------------------------------------------------------
@@ -204,9 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     def make_backend() -> Backend:
         return hq.HQBackend(hq_bin, server_dir, time_request=args.time_request)
 
-    resources = {"cores": args.cores_per_task, "gpus": args.gpus_per_task, "cwd": os.getcwd()}
     executors: list[TaskExecutor] = []
-    factory = make_executor_factory(make_backend, args.spool, resources, executors)
 
     # The HQ server and worker the launcher starts for itself when it was
     # given no server. Stays empty otherwise. It is closed in `finally`,
@@ -236,8 +252,14 @@ def main(argv: list[str] | None = None) -> int:
         if config is None:
             log.warning("infretis refused to start; its reason is on stderr")
             return EXIT_REFUSED
-        if "wmdrun" in config["runner"]:
-            check_wmdrun(config["runner"]["wmdrun"], args.cores_per_task)
+        resources: dict[str, Any] = {
+            "cores": args.cores_per_task, "gpus": args.gpus_per_task, "cwd": os.getcwd()}
+        threads = check_wmdrun(config["runner"].get("wmdrun", []), args.cores_per_task)
+        if threads is not None:
+            # HQ sets OMP_NUM_THREADS to the task's cores unless the task sets
+            # it, and GROMACS aborts when it differs from -ntomp.
+            resources["env"] = {"OMP_NUM_THREADS": str(threads)}
+        factory = make_executor_factory(make_backend, args.spool, resources, executors)
         stopped = scheduler(config, executor_factory=factory)
         # infretis gave the stop signals back to Python's default handlers,
         # and a second signal now would end the launcher mid-shutdown.

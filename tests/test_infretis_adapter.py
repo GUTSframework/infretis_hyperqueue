@@ -71,16 +71,32 @@ def path_numbers(rundir):
 
 
 def test_check_wmdrun():
-    check_wmdrun(["gmx mdrun -ntomp 2 -ntmpi 1", 1], 2)
+    assert check_wmdrun(["gmx mdrun -ntomp 2 -ntmpi 1", 1], 2) == 2
+    assert check_wmdrun([0, 0], 2) is None  # placeholders of other engines
+    assert check_wmdrun(["gmx mdrun"], 2) is None  # OMP_NUM_THREADS stays HQ's
     for flag, shown in [("-pin on", "-pin on"), ("-pin auto", "-pin auto"),
                         ("-pinoffset 4", "-pinoffset"), ("-pinstride 1", "-pinstride")]:
         with pytest.raises(SystemExit, match=f"wmdrun has {shown} in"):
             check_wmdrun([f"gmx mdrun -ntomp 2 {flag}"], 2)
     check_wmdrun(["gmx mdrun -ntomp 2 -pin off"], 2)  # does not pin
-    with pytest.raises(SystemExit, match="-ntomp 2 but --cores-per-task is 4"):
+    with pytest.raises(SystemExit, match="-ntmpi 1 × -ntomp 2 in .* --cores-per-task is 4"):
         check_wmdrun(["gmx mdrun -ntomp 2 -ntmpi 1"], 4)
+    with pytest.raises(SystemExit, match="-ntmpi 1 × -ntomp 2 in .* --cores-per-task is 4"):
+        check_wmdrun(["gmx mdrun -ntomp 2"], 4)  # -ntmpi 1 if not given
     check_wmdrun(["gmx_pin mdrun -ntomp 2 -deffnm x-pin"], 2)  # not flags
     check_wmdrun(["gmx mdrun -deffnm x-ntomp 4 -ntomp 2"], 2)  # the first is no flag
+
+
+def test_check_wmdrun_thread_mpi():
+    """Several thread-MPI ranks per move: -ntmpi × -ntomp is the task's
+    cores, and each move's OMP_NUM_THREADS is -ntomp."""
+    assert check_wmdrun(["gmx mdrun -ntmpi 2 -ntomp 4"] * 2, 8) == 4
+    with pytest.raises(SystemExit, match="-ntmpi 2 × -ntomp 4 in .* --cores-per-task is 4"):
+        check_wmdrun(["gmx mdrun -ntmpi 2 -ntomp 4"], 4)
+    with pytest.raises(SystemExit, match="-ntmpi 2 but no -ntomp"):
+        check_wmdrun(["gmx mdrun -ntmpi 2"], 4)
+    with pytest.raises(SystemExit, match=r"different -ntomp \(\[2, 4\]\)"):
+        check_wmdrun(["gmx mdrun -ntmpi 2 -ntomp 4", "gmx mdrun -ntmpi 4 -ntomp 2"], 8)
 
 
 def test_check_gpus(hq_cluster):

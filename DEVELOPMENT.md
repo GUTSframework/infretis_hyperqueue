@@ -229,7 +229,8 @@ fut = ex.submit(fn, arg, resource_dict={"cores": 4, "cwd": "...", "env": {...}})
 - **Like `ProcessPoolExecutor` with spawn:** calls and results must pickle
   by reference; the caller's `sys.path` is sent along. Unlike it, the
   initializer runs before every call, and failures arrive as `TaskFailed`.
-- HQ sets `OMP_NUM_THREADS` to the task's cores for every task.
+- HQ sets `OMP_NUM_THREADS` to the task's cores for every task, unless the
+  task's `env` sets it.
 
 ## The launcher
 
@@ -258,8 +259,11 @@ stop their MD program on SIGTERM, infretis stops gracefully on
 SIGTERM/SIGINT (after the result it is recording, `restart.toml` last),
 and a refused setup (a finished run included) says why on stderr. The
 launcher adds a check of `wmdrun`: no pinning flags (HQ places the
-tasks), and `-ntomp` equal to `--cores-per-task`; a `wmdrun` that fails it
-is refused, not rewritten. At start it refuses an infretis that pip
+tasks), `-ntmpi` × `-ntomp` equal to `--cores-per-task` (`-ntmpi` is 1 if
+not given), and the same `-ntomp` in every command; a `wmdrun` that fails
+it is refused, not rewritten. Each move's `OMP_NUM_THREADS` is set to
+`-ntomp`, so `-ntmpi 2 -ntomp 4` runs a move as two thread-MPI ranks of
+four threads each. At start it refuses an infretis that pip
 installed from another commit than the pin (one installed from a local
 directory records no commit, and only gets a warning). The fork's other
 fixes (atomic `restart.toml`, no busy spin in the parent, restarts from
