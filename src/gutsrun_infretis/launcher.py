@@ -208,7 +208,10 @@ def main(argv: list[str] | None = None) -> int:
     executors: list[TaskExecutor] = []
     factory = make_executor_factory(make_backend, args.spool, resources, executors)
 
-    own_hq = contextlib.ExitStack()
+    # The HQ server and worker the launcher starts for itself when it was
+    # given no server. Stays empty otherwise. It is closed in `finally`,
+    # after the executors have cancelled their HQ jobs on it.
+    own_hq_server = contextlib.ExitStack()
     try:
         if server_dir is None:
             cores = len(os.sched_getaffinity(0))
@@ -216,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
                 sys.exit(f"--cores-per-task is {args.cores_per_task}, but this machine "
                          f"lets the launcher use only {cores} cores")
             server_dir = str(Path("gutsrun-hq").resolve())
-            own_hq.enter_context(hq.running_server_and_worker(
+            own_hq_server.enter_context(hq.running_server_and_worker(
                 hq_bin, Path(server_dir), "gutsrun", cores))
             log.info("own hq server in %s, worker with %d cores", server_dir, cores)
         if args.gpus_per_task:
@@ -253,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         for ex in executors:
             ex.shutdown(wait=False, cancel_futures=True)
-        own_hq.close()  # after the executors: they cancel their HQ jobs
+        own_hq_server.close()
 
 
 if __name__ == "__main__":
