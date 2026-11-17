@@ -75,21 +75,20 @@ log = logging.getLogger("gutsrun_infretis")
 # --- the executor ---------------------------------------------------------------
 
 
-EXECUTORS: list[TaskExecutor] = []
-
-
 def make_executor_factory(make_backend: Callable[[], Backend], spool_dir: str,
-                          resource_dict: dict[str, Any]) -> Callable[..., TaskExecutor]:
-    """infretis's `executor_factory`: takes ProcessPoolExecutor's arguments
-    and returns a TaskExecutor, which runs infretis's initializer before
-    every call (each in a fresh task process)."""
+                          resource_dict: dict[str, Any],
+                          executors: list[TaskExecutor]) -> Callable[..., TaskExecutor]:
+    """Returns infretis's `executor_factory`. It takes ProcessPoolExecutor's
+    arguments and returns a TaskExecutor, which runs infretis's initializer
+    before every call (each in a fresh task process). It appends each
+    executor it makes to `executors`, for the caller to shut down."""
 
     def factory(max_workers: int | None = None, initializer: Callable[..., object] | None = None,
                 initargs: tuple[Any, ...] = (), mp_context: object = None) -> TaskExecutor:
         ex = TaskExecutor(
             make_backend(), spool_dir, max_workers=max_workers,
             initializer=initializer, initargs=initargs, resource_dict=resource_dict)
-        EXECUTORS.append(ex)
+        executors.append(ex)
         log.info("gutsrun executor: %s", ex.dir)
         return ex
     return factory
@@ -197,7 +196,8 @@ def main(argv: list[str] | None = None) -> int:
         return hq.HQBackend(hq_bin, server_dir, time_request=args.time_request)
 
     resources = {"cores": args.cores_per_task, "gpus": args.gpus_per_task, "cwd": os.getcwd()}
-    factory = make_executor_factory(make_backend, args.spool, resources)
+    executors: list[TaskExecutor] = []
+    factory = make_executor_factory(make_backend, args.spool, resources, executors)
 
     own_hq = contextlib.ExitStack()
     try:
@@ -242,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
         log.exception("run failed")
         raise
     finally:
-        for ex in EXECUTORS:
+        for ex in executors:
             ex.shutdown(wait=False, cancel_futures=True)
         own_hq.close()  # after the executors: they cancel their HQ jobs
 
