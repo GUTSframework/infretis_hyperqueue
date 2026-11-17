@@ -50,7 +50,7 @@ import signal
 import sys
 import time
 from collections.abc import Callable
-from importlib.metadata import distribution
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from typing import Any
 
@@ -98,10 +98,12 @@ def make_executor_factory(make_backend: Callable[[], Backend], spool_dir: str,
 
 
 def infretis_commit() -> str | None:
-    """The installed infretis's git commit, if pip recorded one."""
+    """Returns the installed infretis's git commit, or None if pip recorded
+    none: infretis was installed from a local directory, or is imported from
+    a path without package metadata."""
     try:
         info = json.loads(distribution("infretis").read_text("direct_url.json") or "{}")
-    except Exception:
+    except PackageNotFoundError:
         return None
     return info.get("vcs_info", {}).get("commit_id")
 
